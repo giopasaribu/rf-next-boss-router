@@ -15,11 +15,16 @@ paste-and-confirm step.
 
 ## Core design decisions (already made — do not re-litigate)
 
-- **Stack:** Node.js + Fastify + TypeScript on a single small VPS. One process
-  serves the form, calls the LLM, and does the fan-out. Chosen over n8n because a
-  small coded service is more robust to maintain long-term; and Node (not Python)
-  because the developer works in JavaScript. Fastify chosen for its built-in
-  JSON-schema validation, which helps enforce the LLM output shape.
+- **Stack:** Node.js + Fastify + TypeScript, run as one long-lived process. One
+  process serves the form, calls the LLM, and does the fan-out. Chosen over n8n
+  because a small coded service is more robust to maintain long-term; and Node
+  (not Python) because the developer works in JavaScript. Fastify chosen for its
+  built-in JSON-schema validation, which helps enforce the LLM output shape.
+- **Deploy target:** a persistent-process host — **Render** (recommended, free,
+  Blueprint in `render.yaml`) or a self-hosted VPS (BiznetGio). NOT serverless as
+  written: the pending store (see below) lives in memory between `/preview` and
+  `/confirm`, so it needs ONE always-on instance. Serverless (Vercel/Workers)
+  would require moving that store to external KV first. Keep it single-instance.
 - **LLM: Groq cloud API (revised from local Ollama).** Originally the plan was a
   local Ollama on the VPS, but that forced a ~4 GB+ RAM box just for the model.
   Since per-post token use is tiny, we switched to Groq's free, OpenAI-compatible
@@ -242,6 +247,10 @@ Provide a `.env.example` with these keys and empty values. Load with `dotenv`.
 ```
 .
 ├── CLAUDE.md               # this file
+├── README.md               # quick reference
+├── DEPLOY-RENDER.md        # recommended deploy guide (Render Blueprint)
+├── SETUP.md                # self-host-on-a-VPS guide
+├── render.yaml             # Render Blueprint (build/start/env for the web service)
 ├── .env.example
 ├── package.json
 ├── tsconfig.json

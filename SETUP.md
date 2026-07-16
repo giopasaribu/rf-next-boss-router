@@ -1,4 +1,10 @@
-# SETUP.md — From-scratch deployment guide
+# SETUP.md — Self-hosting on a VPS (from scratch)
+
+> **Looking for the easy way?** If you just want it running with minimal setup and
+> no server to manage, use **[DEPLOY-RENDER.md](./DEPLOY-RENDER.md)** — push to
+> GitHub, click through a Blueprint, done (free tier, automatic HTTPS). **That's
+> the recommended path.** This guide is the **self-hosted VPS alternative** for
+> when you want full control on your own box (e.g. BiznetGio).
 
 This guide takes you from **nothing** to a running RF Boss Announcement Router on
 a fresh Linux VPS: getting a free **Groq** API key for the LLM, getting your

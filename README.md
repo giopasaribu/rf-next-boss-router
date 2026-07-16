@@ -48,10 +48,15 @@ Anything that fails is **diverted to a `#needs-review` channel** instead of a
 live guild channel, and surfaced as a warning in the preview. Good targets in a
 partly-broken announcement still get delivered — nothing is silently dropped.
 
-> **Deploying from scratch on a fresh VPS?** Follow **[SETUP.md](./SETUP.md)** —
-> a step-by-step guide covering VPS sizing, getting a free Groq API key, getting
-> Discord webhooks and a Telegram bot, deploying, and safely testing on
-> production. The notes below are the quick reference.
+> **Deploying?** Two guides:
+> - **[DEPLOY-RENDER.md](./DEPLOY-RENDER.md)** — the easy, recommended path:
+>   push to GitHub, click through a Render Blueprint, done (free tier, automatic
+>   HTTPS, no server to manage).
+> - **[SETUP.md](./SETUP.md)** — self-host from scratch on your own VPS (e.g.
+>   BiznetGio): sizing, hardening, systemd, HTTPS. Full control.
+>
+> Both cover getting a free Groq API key, Discord webhooks, and a Telegram bot,
+> and testing safely on prod. The notes below are the quick local reference.
 
 ## Requirements
 
@@ -132,10 +137,16 @@ src/
     └── index.html     the one-page form + preview + confirm UI
 ```
 
-## Deploying on a VPS (systemd)
+## Deploying
 
-Build once (`npm run build`) and run `dist/server.js` under systemd. Example
-unit — adjust `User`, `WorkingDirectory`, and the node path:
+**Easiest — Render (recommended):** the repo ships a `render.yaml` Blueprint.
+Push to GitHub, create a Blueprint on Render, paste your secrets, and you're live
+on a free HTTPS URL. Full walkthrough: **[DEPLOY-RENDER.md](./DEPLOY-RENDER.md)**.
+
+**Self-host on a VPS (systemd):** full from-scratch guide in
+**[SETUP.md](./SETUP.md)**. In short — build once (`npm run build`) and run
+`dist/server.js` under systemd. Example unit — adjust `User`, `WorkingDirectory`,
+and the node path:
 
 ```ini
 # /etc/systemd/system/boss-router.service
