@@ -471,7 +471,7 @@
       if (!res.ok) { box.innerHTML = "<p class='status fail'>" + (data.error || "failed") + "</p>"; return; }
       box.innerHTML = "";
       if (!send) {
-        if (!data.plan.length) { box.append(h("p", { class: "status fail" }, "Nothing would be sent — check webhooks/assignments.")); return; }
+        if (!data.plan.length) { box.append(h("p", { class: "status fail" }, data.reason || "Nothing would be sent — check webhooks/assignments.")); return; }
         data.plan.forEach(function (it) {
           box.append(h("div", { class: "previewitem" }, h("div", { class: "to" }, "→ " + it.label), h("pre", {}, it.message)));
         });

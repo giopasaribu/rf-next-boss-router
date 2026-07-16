@@ -9,7 +9,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { loadDb } from "../db.js";
-import { planAnnouncement } from "../messages.js";
+import { planAnnouncement, diagnoseEmptyAnnouncement } from "../messages.js";
 import { deliver } from "../sender.js";
 import type { SendMode } from "../types.js";
 
@@ -31,11 +31,15 @@ const announceRoute: FastifyPluginAsync = async function announceRoute(fastify) 
 
     if (body.dryRun) {
       // Never expose webhook URLs to the browser.
-      return { mode, plan: plan.map((p) => ({ label: p.label, message: p.message })) };
+      return {
+        mode,
+        plan: plan.map((p) => ({ label: p.label, message: p.message })),
+        reason: plan.length === 0 ? diagnoseEmptyAnnouncement(db, mode, body.targetGuildIds) : undefined,
+      };
     }
 
     if (plan.length === 0) {
-      return reply.code(400).send({ error: "Nothing to send — no matching channels/webhooks configured." });
+      return reply.code(400).send({ error: diagnoseEmptyAnnouncement(db, mode, body.targetGuildIds) });
     }
 
     const result = await deliver(plan);

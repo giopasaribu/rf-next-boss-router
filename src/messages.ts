@@ -136,6 +136,54 @@ export function buildGroupReminder(db: DB, timing: Timing, leadMin: number): str
 // --- planners --------------------------------------------------------------
 
 /**
+ * When an announcement plan comes out empty, work out the most useful reason so
+ * the UI can tell the operator exactly what to fix (rather than a vague error).
+ */
+export function diagnoseEmptyAnnouncement(
+  db: DB,
+  mode: DB["settings"]["sendMode"],
+  targetGuildIds?: string[],
+): string {
+  if (db.guilds.length === 0) {
+    return "No guilds yet — add a guild and paste its Discord webhook URL.";
+  }
+  const guildsWithWebhook = db.guilds.filter((g) => g.webhooks.some((w) => w.url.trim() !== ""));
+  if (guildsWithWebhook.length === 0) {
+    return "No guild has a webhook URL — add a Discord webhook URL under a guild.";
+  }
+  const totalSpawns = db.schedule.reduce((n, t) => n + t.spawns.length, 0);
+  if (totalSpawns === 0) {
+    return "The schedule has no bosses — add a timing and at least one boss.";
+  }
+  const anyAssigned = db.schedule.some((t) => t.spawns.some((s) => s.guildIds.length > 0));
+  if (!anyAssigned) {
+    return "No boss is assigned to a guild — tick the guild checkbox(es) on your bosses.";
+  }
+
+  if (mode === "per_guild") {
+    const ok = db.guilds.some(
+      (g) =>
+        g.webhooks.some((w) => w.url.trim() !== "") &&
+        db.schedule.some((t) => t.spawns.some((s) => s.guildIds.includes(g.id))),
+    );
+    if (!ok) {
+      return "The guild(s) your bosses are assigned to have no webhook URL — the guild with a webhook and the guild with bosses must be the same one.";
+    }
+  } else {
+    const targets =
+      targetGuildIds && targetGuildIds.length > 0
+        ? db.guilds.filter((g) => targetGuildIds.includes(g.id))
+        : db.guilds;
+    if (targets.length === 0) return "No target channels selected for the concatenated announcement.";
+    if (!targets.some((g) => g.webhooks.some((w) => w.url.trim() !== ""))) {
+      return "The selected target guild(s) have no webhook URL.";
+    }
+  }
+
+  return "Nothing matched — double-check webhook URLs and guild assignments.";
+}
+
+/**
  * Plan the manual announcement. `mode` overrides settings.sendMode; for
  * concatenated mode, `targetGuildIds` limits which guild channels receive the
  * full schedule (default: all guilds).
