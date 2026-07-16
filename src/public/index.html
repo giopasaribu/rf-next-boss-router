@@ -1,0 +1,333 @@
+<!--
+  RF Boss Announcement Router — operator form.
+
+  Single self-contained page: inline CSS + vanilla JS using fetch().
+  Flow: paste raw text -> /preview -> review routing + warnings -> Confirm/Cancel
+        -> /confirm -> show per-channel delivery status.
+
+  The operator never touches JSON. The shared secret is entered once and kept in
+  sessionStorage so it survives the preview -> confirm step (and page reloads in
+  the same tab) without being persisted to disk.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RF Boss Announcement Router</title>
+
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #20242e;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --ok: #3fb27f;
+    --warn: #e0a030;
+    --err: #e05a5a;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 18px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  textarea, input[type="password"] {
+    width: 100%;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: inherit;
+  }
+  textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  .row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.confirm { background: var(--ok); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 20px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 10px; }
+
+  .delivery { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--panel-2); }
+  .delivery .to { font-weight: 600; margin-bottom: 6px; }
+  .delivery.review .to { color: var(--warn); }
+  .delivery pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: var(--text); }
+
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  .badge.live { background: rgba(63,178,127,0.2); color: var(--ok); }
+  .badge.review { background: rgba(224,160,48,0.2); color: var(--warn); }
+
+  .warnlist { list-style: none; padding: 0; margin: 6px 0 0; }
+  .warnlist li { padding: 6px 10px; border-radius: 6px; margin: 4px 0; font-size: 13px; }
+  .warnlist li.warning { background: rgba(224,160,48,0.12); color: var(--warn); }
+  .warnlist li.error { background: rgba(224,90,90,0.12); color: var(--err); }
+
+  .status { padding: 8px 10px; border-radius: 6px; margin: 4px 0; font-size: 13px; display: flex; justify-content: space-between; gap: 10px; }
+  .status.ok { background: rgba(63,178,127,0.12); color: var(--ok); }
+  .status.fail { background: rgba(224,90,90,0.12); color: var(--err); }
+
+  .notice { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .error-box { background: rgba(224,90,90,0.12); color: var(--err); border: 1px solid rgba(224,90,90,0.4); border-radius: 8px; padding: 12px; margin-top: 16px; }
+  .hidden { display: none; }
+</style>
+
+<div class="wrap">
+  <h1>RF Boss Announcement Router</h1>
+  <p class="sub">Paste the raw boss announcement, preview where it will post, then confirm.</p>
+
+  <label for="secret">Shared secret</label>
+  <input id="secret" type="password" placeholder="operator secret" autocomplete="current-password" />
+
+  <label for="raw">Announcement</label>
+  <textarea id="raw" placeholder="Novus Boss Group C&#10;Time = 18:30&#10;RISEvGGI = Lv. 50 Forest of Exiles&#10;..."></textarea>
+
+  <div class="row">
+    <button id="previewBtn">Preview</button>
+    <button id="clearBtn" class="secondary" type="button">Clear</button>
+  </div>
+
+  <div id="errorBox" class="error-box hidden"></div>
+
+  <!-- Preview panel: filled in after /preview succeeds. -->
+  <div id="previewPanel" class="panel hidden">
+    <h2>Preview — here's what I'll post</h2>
+    <div id="deliveries"></div>
+
+    <div id="warningsWrap" class="hidden">
+      <label style="margin-top:14px;">Warnings</label>
+      <ul id="warnings" class="warnlist"></ul>
+    </div>
+
+    <div id="notesWrap" class="hidden">
+      <p id="notes" class="notice"></p>
+    </div>
+
+    <div class="row">
+      <button id="confirmBtn" class="confirm">Confirm &amp; Send</button>
+      <button id="cancelBtn" class="secondary" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Result panel: filled in after /confirm. -->
+  <div id="resultPanel" class="panel hidden">
+    <h2>Delivery status</h2>
+    <div id="statuses"></div>
+  </div>
+</div>
+
+<script>
+  // --- tiny DOM helpers ----------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function show(el) { el.classList.remove("hidden"); }
+  function hide(el) { el.classList.add("hidden"); }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Keep the secret in sessionStorage so it survives preview -> confirm and
+  // reloads in this tab, without persisting to disk.
+  var secretInput = $("secret");
+  secretInput.value = sessionStorage.getItem("appSecret") || "";
+  secretInput.addEventListener("input", function () {
+    sessionStorage.setItem("appSecret", secretInput.value);
+  });
+
+  var currentPendingId = null;
+
+  function showError(msg) {
+    var box = $("errorBox");
+    box.textContent = msg;
+    show(box);
+  }
+  function clearError() { hide($("errorBox")); }
+
+  // POST helper that attaches the shared secret header.
+  async function postJson(path, body) {
+    var res = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-app-secret": secretInput.value,
+      },
+      body: JSON.stringify(body),
+    });
+    var data = null;
+    try { data = await res.json(); } catch (e) { /* non-JSON */ }
+    return { res: res, data: data };
+  }
+
+  // --- Preview -------------------------------------------------------------
+  async function doPreview() {
+    clearError();
+    hide($("previewPanel"));
+    hide($("resultPanel"));
+
+    var raw = $("raw").value.trim();
+    if (!raw) { showError("Paste an announcement first."); return; }
+    if (!secretInput.value) { showError("Enter the shared secret."); return; }
+
+    var btn = $("previewBtn");
+    btn.disabled = true;
+    btn.textContent = "Parsing…";
+    try {
+      var r = await postJson("/preview", { raw: raw });
+      if (!r.res.ok) {
+        showError((r.data && (r.data.detail || r.data.error)) || ("Preview failed (HTTP " + r.res.status + ")"));
+        return;
+      }
+      renderPreview(r.data);
+    } catch (e) {
+      showError("Network error: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Preview";
+    }
+  }
+
+  function renderPreview(data) {
+    currentPendingId = data.pendingId;
+
+    // Deliveries.
+    var container = $("deliveries");
+    container.innerHTML = "";
+
+    if (!data.deliveries.length && !data.telegram) {
+      container.innerHTML = '<p class="notice">Nothing would be posted.</p>';
+    }
+
+    data.deliveries.forEach(function (d) {
+      var div = document.createElement("div");
+      div.className = "delivery" + (d.isNeedsReview ? " review" : "");
+      var badge = d.isNeedsReview
+        ? '<span class="badge review">needs review</span>'
+        : '<span class="badge live">live</span>';
+      div.innerHTML =
+        '<div class="to">→ ' + esc(d.label) + badge + "</div>" +
+        "<pre>" + esc(d.message) + "</pre>";
+      container.appendChild(div);
+    });
+
+    if (data.telegram) {
+      var tg = document.createElement("div");
+      tg.className = "delivery";
+      tg.innerHTML =
+        '<div class="to">→ Telegram (personal copy)<span class="badge live">copy</span></div>' +
+        "<pre>" + esc(data.telegram.message) + "</pre>";
+      container.appendChild(tg);
+    }
+
+    // Warnings.
+    var warnWrap = $("warningsWrap");
+    var warnList = $("warnings");
+    warnList.innerHTML = "";
+    if (data.warnings && data.warnings.length) {
+      data.warnings.forEach(function (w) {
+        var li = document.createElement("li");
+        li.className = w.level;
+        li.textContent = "[" + w.level + "] " + w.message;
+        warnList.appendChild(li);
+      });
+      show(warnWrap);
+    } else {
+      hide(warnWrap);
+    }
+
+    // Plan notes.
+    var notesWrap = $("notesWrap");
+    if (data.planNotes && data.planNotes.length) {
+      $("notes").textContent = data.planNotes.join("  •  ");
+      show(notesWrap);
+    } else {
+      hide(notesWrap);
+    }
+
+    show($("previewPanel"));
+  }
+
+  // --- Confirm -------------------------------------------------------------
+  async function doConfirm() {
+    if (!currentPendingId) return;
+    clearError();
+    var btn = $("confirmBtn");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    try {
+      var r = await postJson("/confirm", { pendingId: currentPendingId });
+      if (!r.res.ok) {
+        showError((r.data && r.data.error) || ("Confirm failed (HTTP " + r.res.status + ")"));
+        return;
+      }
+      renderResult(r.data);
+      // A pendingId is one-shot; prevent re-sending the same preview.
+      currentPendingId = null;
+      hide($("previewPanel"));
+    } catch (e) {
+      showError("Network error: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Confirm & Send";
+    }
+  }
+
+  function renderResult(data) {
+    var container = $("statuses");
+    container.innerHTML = "";
+    (data.statuses || []).forEach(function (s) {
+      var div = document.createElement("div");
+      div.className = "status " + (s.ok ? "ok" : "fail");
+      div.innerHTML =
+        "<span>" + (s.ok ? "✓ " : "✗ ") + esc(s.destination) + "</span>" +
+        "<span>" + esc(s.detail) + "</span>";
+      container.appendChild(div);
+    });
+    if (!data.statuses || !data.statuses.length) {
+      container.innerHTML = '<p class="notice">Nothing was sent.</p>';
+    }
+    show($("resultPanel"));
+  }
+
+  function doCancel() {
+    currentPendingId = null;
+    hide($("previewPanel"));
+  }
+
+  function doClear() {
+    $("raw").value = "";
+    clearError();
+    hide($("previewPanel"));
+    hide($("resultPanel"));
+  }
+
+  // --- wire up -------------------------------------------------------------
+  $("previewBtn").addEventListener("click", doPreview);
+  $("confirmBtn").addEventListener("click", doConfirm);
+  $("cancelBtn").addEventListener("click", doCancel);
+  $("clearBtn").addEventListener("click", doClear);
+</script>

@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    /* We ship a small Node service. Target a modern Node (18+) runtime. */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+
+    /* Output layout: compile src/ -> dist/ so `npm start` runs dist/server.js. */
+    "rootDir": "src",
+    "outDir": "dist",
+
+    /* Strictness: this is a routing service for time-critical alerts, so we want
+       the compiler to catch as much as possible before it ever runs. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    /* Interop / ergonomics. */
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
