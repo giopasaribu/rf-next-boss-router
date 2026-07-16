@@ -1,333 +1,504 @@
 <!--
-  RF Boss Announcement Router — operator form.
+  RF Boss Announcement Router — single-maintainer admin UI.
 
-  Single self-contained page: inline CSS + vanilla JS using fetch().
-  Flow: paste raw text -> /preview -> review routing + warnings -> Confirm/Cancel
-        -> /confirm -> show per-channel delivery status.
+  Self-contained page (inline CSS + vanilla JS). Manages guilds+webhooks,
+  a reusable boss catalog, the recurring daily schedule (timings -> bosses ->
+  guild assignments), a watchlist, and settings. "Save" persists everything;
+  "Announce" posts the schedule now. Reminders fire automatically (server-side).
 
-  The operator never touches JSON. The shared secret is entered once and kept in
-  sessionStorage so it survives the preview -> confirm step (and page reloads in
-  the same tab) without being persisted to disk.
+  ALL times are UTC+7 (WIB, Indonesia).
 -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>RF Boss Announcement Router</title>
+<title>RF Boss Router — Admin</title>
 
 <style>
   :root {
-    --bg: #0f1115;
-    --panel: #181b22;
-    --panel-2: #20242e;
-    --text: #e6e8ec;
-    --muted: #9aa3b2;
-    --accent: #4f8cff;
-    --ok: #3fb27f;
-    --warn: #e0a030;
-    --err: #e05a5a;
-    --border: #2a2f3a;
+    --bg:#0f1115; --panel:#181b22; --panel-2:#20242e; --text:#e6e8ec; --muted:#9aa3b2;
+    --accent:#4f8cff; --ok:#3fb27f; --warn:#e0a030; --err:#e05a5a; --border:#2a2f3a;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 18px 64px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:0 16px 80px; }
+  h1 { font-size:19px; margin:0; }
+  h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .muted { color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
 
-  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
-  textarea, input[type="password"] {
-    width: 100%;
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    font: inherit;
-  }
-  textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  /* sticky action bar */
+  .bar { position:sticky; top:0; z-index:20; background:rgba(15,17,21,0.95);
+    backdrop-filter:blur(6px); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:16px; }
+  .bar .grow { flex:1; }
+  .bar .status { font-size:13px; }
+  .dirty { color:var(--warn); }
+  .saved { color:var(--ok); }
 
-  .row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
-  button {
-    background: var(--accent);
-    color: #fff;
-    border: 0;
-    border-radius: 8px;
-    padding: 10px 18px;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
-  button.confirm { background: var(--ok); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:16px; margin:16px 0; }
+  .card { background:var(--panel-2); border:1px solid var(--border); border-radius:10px;
+    padding:12px; margin:10px 0; }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    margin-top: 20px;
-  }
-  .panel h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input[type=text], input[type=password], select {
+    width:100%; background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font:inherit; }
+  input.small { width:90px; }
+  .rowline { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  .rowline > * { flex:0 0 auto; }
+  .grow2 { flex:1 1 160px; }
 
-  .delivery { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--panel-2); }
-  .delivery .to { font-weight: 600; margin-bottom: 6px; }
-  .delivery.review .to { color: var(--warn); }
-  .delivery pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: var(--text); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+    padding:8px 14px; font:inherit; font-weight:600; cursor:pointer; }
+  button.sm { padding:5px 10px; font-size:13px; }
+  button.secondary { background:var(--panel-2); color:var(--text); border:1px solid var(--border); }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--border); }
+  button.danger { background:transparent; color:var(--err); border:1px solid rgba(224,90,90,0.4); }
+  button.confirm { background:var(--ok); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .add { margin-top:6px; }
 
-  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
-  .badge.live { background: rgba(63,178,127,0.2); color: var(--ok); }
-  .badge.review { background: rgba(224,160,48,0.2); color: var(--warn); }
+  .guildchecks { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:4px; }
+  .guildchecks label { display:inline-flex; align-items:center; gap:5px; margin:0;
+    color:var(--text); font-size:13px; cursor:pointer; }
+  .guildchecks input { width:auto; }
+  .inline { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text); }
 
-  .warnlist { list-style: none; padding: 0; margin: 6px 0 0; }
-  .warnlist li { padding: 6px 10px; border-radius: 6px; margin: 4px 0; font-size: 13px; }
-  .warnlist li.warning { background: rgba(224,160,48,0.12); color: var(--warn); }
-  .warnlist li.error { background: rgba(224,90,90,0.12); color: var(--err); }
+  .timing { border-left:3px solid var(--accent); }
+  .timehead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .spawn { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;
+    padding:8px 0; border-top:1px solid var(--border); margin-top:8px; }
+  .spawn .fields { flex:1 1 320px; }
 
-  .status { padding: 8px 10px; border-radius: 6px; margin: 4px 0; font-size: 13px; display: flex; justify-content: space-between; gap: 10px; }
-  .status.ok { background: rgba(63,178,127,0.12); color: var(--ok); }
-  .status.fail { background: rgba(224,90,90,0.12); color: var(--err); }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    padding:10px 16px; font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:50; }
+  .toast.show { opacity:1; }
+  .toast.err { border-color:rgba(224,90,90,0.5); color:var(--err); }
+  .toast.ok { border-color:rgba(63,178,127,0.5); color:var(--ok); }
 
-  .notice { color: var(--muted); font-size: 13px; margin-top: 8px; }
-  .error-box { background: rgba(224,90,90,0.12); color: var(--err); border: 1px solid rgba(224,90,90,0.4); border-radius: 8px; padding: 12px; margin-top: 16px; }
-  .hidden { display: none; }
+  /* modal */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none;
+    align-items:flex-start; justify-content:center; z-index:40; padding:24px 12px; overflow:auto; }
+  .overlay.show { display:flex; }
+  .modal { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:18px; width:100%; max-width:680px; }
+  .previewitem { background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    padding:10px; margin:8px 0; }
+  .previewitem .to { font-weight:600; margin-bottom:6px; }
+  .previewitem pre { margin:0; white-space:pre-wrap; word-break:break-word;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; }
+  .status { padding:8px 10px; border-radius:6px; margin:4px 0; font-size:13px;
+    display:flex; justify-content:space-between; gap:10px; }
+  .status.ok { background:rgba(63,178,127,.12); color:var(--ok); }
+  .status.fail { background:rgba(224,90,90,.12); color:var(--err); }
 </style>
 
-<div class="wrap">
-  <h1>RF Boss Announcement Router</h1>
-  <p class="sub">Paste the raw boss announcement, preview where it will post, then confirm.</p>
-
-  <label for="secret">Shared secret</label>
-  <input id="secret" type="password" placeholder="operator secret" autocomplete="current-password" />
-
-  <label for="raw">Announcement</label>
-  <textarea id="raw" placeholder="Novus Boss Group C&#10;Time = 18:30&#10;RISEvGGI = Lv. 50 Forest of Exiles&#10;..."></textarea>
-
-  <div class="row">
-    <button id="previewBtn">Preview</button>
-    <button id="clearBtn" class="secondary" type="button">Clear</button>
-  </div>
-
-  <div id="errorBox" class="error-box hidden"></div>
-
-  <!-- Preview panel: filled in after /preview succeeds. -->
-  <div id="previewPanel" class="panel hidden">
-    <h2>Preview — here's what I'll post</h2>
-    <div id="deliveries"></div>
-
-    <div id="warningsWrap" class="hidden">
-      <label style="margin-top:14px;">Warnings</label>
-      <ul id="warnings" class="warnlist"></ul>
-    </div>
-
-    <div id="notesWrap" class="hidden">
-      <p id="notes" class="notice"></p>
-    </div>
-
-    <div class="row">
-      <button id="confirmBtn" class="confirm">Confirm &amp; Send</button>
-      <button id="cancelBtn" class="secondary" type="button">Cancel</button>
-    </div>
-  </div>
-
-  <!-- Result panel: filled in after /confirm. -->
-  <div id="resultPanel" class="panel hidden">
-    <h2>Delivery status</h2>
-    <div id="statuses"></div>
-  </div>
+<div class="bar">
+  <h1>🐉 Boss Router</h1>
+  <span class="muted">times are UTC+7 (WIB)</span>
+  <span class="grow"></span>
+  <span id="saveStatus" class="status"></span>
+  <button id="saveBtn" class="secondary">Save</button>
+  <button id="announceBtn">Announce…</button>
 </div>
 
+<div class="wrap">
+  <div class="panel" id="settingsPanel"></div>
+  <div class="panel" id="schedulePanel"></div>
+  <div class="panel" id="guildsPanel"></div>
+  <div class="panel" id="bossesPanel"></div>
+  <div class="panel" id="watchPanel"></div>
+</div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+
 <script>
-  // --- tiny DOM helpers ----------------------------------------------------
-  function $(id) { return document.getElementById(id); }
-  function show(el) { el.classList.remove("hidden"); }
-  function hide(el) { el.classList.add("hidden"); }
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
+  var LEAD_OPTIONS = [5, 10, 15, 30, 60];
+  var state = null;
+  var dirty = false;
 
-  // Keep the secret in sessionStorage so it survives preview -> confirm and
-  // reloads in this tab, without persisting to disk.
-  var secretInput = $("secret");
-  secretInput.value = sessionStorage.getItem("appSecret") || "";
-  secretInput.addEventListener("input", function () {
-    sessionStorage.setItem("appSecret", secretInput.value);
-  });
-
-  var currentPendingId = null;
-
-  function showError(msg) {
-    var box = $("errorBox");
-    box.textContent = msg;
-    show(box);
-  }
-  function clearError() { hide($("errorBox")); }
-
-  // POST helper that attaches the shared secret header.
-  async function postJson(path, body) {
-    var res = await fetch(path, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-app-secret": secretInput.value,
-      },
-      body: JSON.stringify(body),
-    });
-    var data = null;
-    try { data = await res.json(); } catch (e) { /* non-JSON */ }
-    return { res: res, data: data };
-  }
-
-  // --- Preview -------------------------------------------------------------
-  async function doPreview() {
-    clearError();
-    hide($("previewPanel"));
-    hide($("resultPanel"));
-
-    var raw = $("raw").value.trim();
-    if (!raw) { showError("Paste an announcement first."); return; }
-    if (!secretInput.value) { showError("Enter the shared secret."); return; }
-
-    var btn = $("previewBtn");
-    btn.disabled = true;
-    btn.textContent = "Parsing…";
-    try {
-      var r = await postJson("/preview", { raw: raw });
-      if (!r.res.ok) {
-        showError((r.data && (r.data.detail || r.data.error)) || ("Preview failed (HTTP " + r.res.status + ")"));
-        return;
-      }
-      renderPreview(r.data);
-    } catch (e) {
-      showError("Network error: " + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Preview";
+  // --- tiny DOM helper -----------------------------------------------------
+  function h(tag, attrs) {
+    var e = document.createElement(tag);
+    attrs = attrs || {};
+    for (var k in attrs) {
+      var v = attrs[k];
+      if (v == null) continue;
+      if (k === "class") e.className = v;
+      else if (k === "html") e.innerHTML = v;
+      else if (k === "value") e.value = v;
+      else if (k === "checked") e.checked = !!v;
+      else if (k.slice(0, 2) === "on") e.addEventListener(k.slice(2).toLowerCase(), v);
+      else e.setAttribute(k, v);
     }
-  }
-
-  function renderPreview(data) {
-    currentPendingId = data.pendingId;
-
-    // Deliveries.
-    var container = $("deliveries");
-    container.innerHTML = "";
-
-    if (!data.deliveries.length && !data.telegram) {
-      container.innerHTML = '<p class="notice">Nothing would be posted.</p>';
-    }
-
-    data.deliveries.forEach(function (d) {
-      var div = document.createElement("div");
-      div.className = "delivery" + (d.isNeedsReview ? " review" : "");
-      var badge = d.isNeedsReview
-        ? '<span class="badge review">needs review</span>'
-        : '<span class="badge live">live</span>';
-      div.innerHTML =
-        '<div class="to">→ ' + esc(d.label) + badge + "</div>" +
-        "<pre>" + esc(d.message) + "</pre>";
-      container.appendChild(div);
-    });
-
-    if (data.telegram) {
-      var tg = document.createElement("div");
-      tg.className = "delivery";
-      tg.innerHTML =
-        '<div class="to">→ Telegram (personal copy)<span class="badge live">copy</span></div>' +
-        "<pre>" + esc(data.telegram.message) + "</pre>";
-      container.appendChild(tg);
-    }
-
-    // Warnings.
-    var warnWrap = $("warningsWrap");
-    var warnList = $("warnings");
-    warnList.innerHTML = "";
-    if (data.warnings && data.warnings.length) {
-      data.warnings.forEach(function (w) {
-        var li = document.createElement("li");
-        li.className = w.level;
-        li.textContent = "[" + w.level + "] " + w.message;
-        warnList.appendChild(li);
+    for (var i = 2; i < arguments.length; i++) {
+      var kids = arguments[i];
+      if (!Array.isArray(kids)) kids = [kids];
+      kids.forEach(function (c) {
+        if (c == null || c === false) return;
+        e.append(c.nodeType ? c : document.createTextNode(String(c)));
       });
-      show(warnWrap);
-    } else {
-      hide(warnWrap);
     }
-
-    // Plan notes.
-    var notesWrap = $("notesWrap");
-    if (data.planNotes && data.planNotes.length) {
-      $("notes").textContent = data.planNotes.join("  •  ");
-      show(notesWrap);
-    } else {
-      hide(notesWrap);
-    }
-
-    show($("previewPanel"));
+    return e;
+  }
+  function uid() { return (crypto.randomUUID ? crypto.randomUUID() : "id" + Math.random().toString(36).slice(2)); }
+  function markDirty() { dirty = true; renderStatus(); }
+  function renderStatus() {
+    var s = document.getElementById("saveStatus");
+    s.textContent = dirty ? "● unsaved changes" : "saved";
+    s.className = "status " + (dirty ? "dirty" : "saved");
+  }
+  var toastTimer;
+  function toast(msg, kind) {
+    var t = document.getElementById("toast");
+    t.textContent = msg; t.className = "toast show " + (kind || "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = "toast " + (kind || ""); }, 2600);
   }
 
-  // --- Confirm -------------------------------------------------------------
-  async function doConfirm() {
-    if (!currentPendingId) return;
-    clearError();
-    var btn = $("confirmBtn");
-    btn.disabled = true;
-    btn.textContent = "Sending…";
-    try {
-      var r = await postJson("/confirm", { pendingId: currentPendingId });
-      if (!r.res.ok) {
-        showError((r.data && r.data.error) || ("Confirm failed (HTTP " + r.res.status + ")"));
-        return;
-      }
-      renderResult(r.data);
-      // A pendingId is one-shot; prevent re-sending the same preview.
-      currentPendingId = null;
-      hide($("previewPanel"));
-    } catch (e) {
-      showError("Network error: " + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Confirm & Send";
-    }
+  // --- load / save ---------------------------------------------------------
+  async function load() {
+    var res = await fetch("/api/state");
+    state = await res.json();
+    dirty = false;
+    renderAll();
   }
-
-  function renderResult(data) {
-    var container = $("statuses");
-    container.innerHTML = "";
-    (data.statuses || []).forEach(function (s) {
-      var div = document.createElement("div");
-      div.className = "status " + (s.ok ? "ok" : "fail");
-      div.innerHTML =
-        "<span>" + (s.ok ? "✓ " : "✗ ") + esc(s.destination) + "</span>" +
-        "<span>" + esc(s.detail) + "</span>";
-      container.appendChild(div);
+  async function save() {
+    var res = await fetch("/api/state", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state),
     });
-    if (!data.statuses || !data.statuses.length) {
-      container.innerHTML = '<p class="notice">Nothing was sent.</p>';
+    if (res.ok) { dirty = false; renderStatus(); toast("Saved", "ok"); }
+    else { toast("Save failed", "err"); }
+  }
+
+  // --- SETTINGS ------------------------------------------------------------
+  function renderSettings() {
+    var p = document.getElementById("settingsPanel");
+    p.innerHTML = "";
+    var s = state.settings;
+    p.append(
+      h("h2", {}, "⚙️ Settings"),
+      h("div", { class: "rowline" },
+        h("div", { class: "grow2" },
+          h("label", {}, "Reminder — how long before spawn"),
+          h("select", { onchange: function (e) { s.reminderLeadMinutes = Number(e.target.value); markDirty(); } },
+            LEAD_OPTIONS.map(function (n) {
+              return h("option", { value: n, checked: false, selected: s.reminderLeadMinutes === n ? "selected" : null }, n + " minutes before");
+            })
+          )
+        ),
+        h("div", { class: "grow2" },
+          h("label", {}, "Default send mode"),
+          h("select", { onchange: function (e) { s.sendMode = e.target.value; markDirty(); } },
+            [["per_guild", "Per-guild (each channel gets its own bosses)"],
+             ["concatenated", "Concatenated (full schedule to selected channels)"]].map(function (o) {
+              return h("option", { value: o[0], selected: s.sendMode === o[0] ? "selected" : null }, o[1]);
+            })
+          )
+        )
+      ),
+      h("div", {},
+        h("label", {}, "Schedule title (optional header line)"),
+        h("input", { type: "text", value: s.scheduleTitle, placeholder: "SCHEDULE FIELD BOSS TODAY",
+          oninput: function (e) { s.scheduleTitle = e.target.value; markDirty(); } })
+      )
+    );
+  }
+
+  // --- SCHEDULE (timings -> spawns) ---------------------------------------
+  function renderSchedule() {
+    var p = document.getElementById("schedulePanel");
+    p.innerHTML = "";
+    p.append(h("h2", {}, "🗓️ Schedule ", h("span", { class: "muted" }, "(recurring daily)")));
+
+    if (state.schedule.length === 0) p.append(h("p", { class: "muted" }, "No timings yet. Add one below."));
+
+    state.schedule.forEach(function (timing) {
+      var card = h("div", { class: "card timing" });
+      card.append(
+        h("div", { class: "timehead" },
+          h("strong", {}, "🕛"),
+          h("input", { type: "text", class: "small", value: timing.time, placeholder: "HH:MM",
+            oninput: function (e) { timing.time = e.target.value; markDirty(); } }),
+          h("span", { class: "muted" }, "WIB"),
+          h("span", { class: "grow" }),
+          h("button", { class: "sm danger", onclick: function () { removeById(state.schedule, timing.id); renderSchedule(); markDirty(); } }, "Delete timing")
+        )
+      );
+
+      if (timing.spawns.length === 0) card.append(h("p", { class: "muted", style: "margin:8px 0 0" }, "No bosses in this timing."));
+
+      timing.spawns.forEach(function (spawn) {
+        card.append(renderSpawn(timing, spawn));
+      });
+
+      card.append(h("button", { class: "sm secondary add", onclick: function () {
+        var first = state.bosses[0];
+        timing.spawns.push({ id: uid(), bossName: first ? first.name : "", level: first ? first.level : "", guildIds: [] });
+        renderSchedule(); markDirty();
+      } }, "+ Add boss"));
+
+      p.append(card);
+    });
+
+    p.append(h("button", { class: "add", onclick: function () {
+      state.schedule.push({ id: uid(), time: "12:00", spawns: [] });
+      renderSchedule(); markDirty();
+    } }, "+ Add timing"));
+  }
+
+  function renderSpawn(timing, spawn) {
+    var row = h("div", { class: "spawn" });
+    var fields = h("div", { class: "fields" });
+
+    // Boss picker: catalog options + free-text fallback via "(custom)".
+    var bossSel = h("select", { onchange: function (e) {
+      if (e.target.value === "__custom") { spawn.bossName = ""; }
+      else {
+        var b = state.bosses.find(function (x) { return x.id === e.target.value; });
+        if (b) { spawn.bossName = b.name; spawn.level = b.level; }
+      }
+      renderSchedule(); markDirty();
+    } });
+    var matched = state.bosses.find(function (b) { return b.name === spawn.bossName; });
+    state.bosses.forEach(function (b) {
+      bossSel.append(h("option", { value: b.id, selected: (matched && matched.id === b.id) ? "selected" : null }, b.name + (b.level ? " (Lv " + b.level + ")" : "")));
+    });
+    bossSel.append(h("option", { value: "__custom", selected: matched ? null : "selected" }, "— custom —"));
+
+    fields.append(
+      h("div", { class: "rowline" },
+        h("div", { class: "grow2" }, h("label", {}, "Boss"), bossSel),
+        h("div", {}, h("label", {}, "Name"),
+          h("input", { type: "text", value: spawn.bossName, placeholder: "boss name",
+            oninput: function (e) { spawn.bossName = e.target.value; markDirty(); } })),
+        h("div", {}, h("label", {}, "Level"),
+          h("input", { type: "text", class: "small", value: spawn.level, placeholder: "61",
+            oninput: function (e) { spawn.level = e.target.value; markDirty(); } }))
+      ),
+      h("label", {}, "Assigned guilds"),
+      renderGuildChecks(spawn)
+    );
+
+    row.append(fields,
+      h("button", { class: "sm danger", onclick: function () { removeById(timing.spawns, spawn.id); renderSchedule(); markDirty(); } }, "✕"));
+    return row;
+  }
+
+  function renderGuildChecks(spawn) {
+    var box = h("div", { class: "guildchecks" });
+    if (state.guilds.length === 0) return h("span", { class: "muted" }, "no guilds yet — add some below");
+    state.guilds.forEach(function (g) {
+      var checked = spawn.guildIds.indexOf(g.id) !== -1;
+      box.append(h("label", {},
+        h("input", { type: "checkbox", checked: checked, onchange: function (e) {
+          if (e.target.checked) { if (spawn.guildIds.indexOf(g.id) === -1) spawn.guildIds.push(g.id); }
+          else { spawn.guildIds = spawn.guildIds.filter(function (id) { return id !== g.id; }); }
+          markDirty();
+        } }),
+        g.name
+      ));
+    });
+    return box;
+  }
+
+  // --- GUILDS --------------------------------------------------------------
+  function renderGuilds() {
+    var p = document.getElementById("guildsPanel");
+    p.innerHTML = "";
+    p.append(h("h2", {}, "🏰 Guilds & webhooks"));
+
+    state.guilds.forEach(function (g) {
+      var card = h("div", { class: "card" });
+      card.append(
+        h("div", { class: "rowline" },
+          h("div", { class: "grow2" }, h("label", {}, "Guild name"),
+            h("input", { type: "text", value: g.name, placeholder: "RISEvGGI",
+              oninput: function (e) { g.name = e.target.value; markDirty(); } })),
+          h("button", { class: "sm danger", onclick: function () { removeById(state.guilds, g.id); renderGuilds(); renderSchedule(); markDirty(); } }, "Delete guild")
+        )
+      );
+      g.webhooks.forEach(function (w) {
+        card.append(h("div", { class: "rowline", style: "margin-top:6px" },
+          h("div", {}, h("label", {}, "Label"),
+            h("input", { type: "text", class: "small", value: w.label, placeholder: "#alerts", style: "width:120px",
+              oninput: function (e) { w.label = e.target.value; markDirty(); } })),
+          h("div", { class: "grow2" }, h("label", {}, "Discord webhook URL"),
+            h("input", { type: "text", value: w.url, placeholder: "https://discord.com/api/webhooks/...",
+              oninput: function (e) { w.url = e.target.value; markDirty(); } })),
+          h("button", { class: "sm ghost", onclick: function () { removeById(g.webhooks, w.id); renderGuilds(); markDirty(); } }, "✕")
+        ));
+      });
+      card.append(h("button", { class: "sm secondary add", onclick: function () {
+        g.webhooks.push({ id: uid(), label: "", url: "" }); renderGuilds(); markDirty();
+      } }, "+ Add webhook"));
+      p.append(card);
+    });
+
+    p.append(h("button", { class: "add", onclick: function () {
+      state.guilds.push({ id: uid(), name: "", webhooks: [{ id: uid(), label: "", url: "" }] });
+      renderGuilds(); renderSchedule(); markDirty();
+    } }, "+ Add guild"));
+  }
+
+  // --- BOSSES (catalog) ----------------------------------------------------
+  function renderBosses() {
+    var p = document.getElementById("bossesPanel");
+    p.innerHTML = "";
+    p.append(h("h2", {}, "👹 Boss catalog ", h("span", { class: "muted" }, "(reusable)")));
+    state.bosses.forEach(function (b) {
+      p.append(h("div", { class: "rowline", style: "margin:6px 0" },
+        h("div", { class: "grow2" }, h("label", {}, "Boss name"),
+          h("input", { type: "text", value: b.name, placeholder: "Mech Warbeast",
+            oninput: function (e) { b.name = e.target.value; markDirty(); } })),
+        h("div", {}, h("label", {}, "Default level"),
+          h("input", { type: "text", class: "small", value: b.level, placeholder: "61",
+            oninput: function (e) { b.level = e.target.value; markDirty(); } })),
+        h("button", { class: "sm ghost", onclick: function () { removeById(state.bosses, b.id); renderBosses(); markDirty(); } }, "✕")
+      ));
+    });
+    p.append(h("button", { class: "add", onclick: function () {
+      state.bosses.push({ id: uid(), name: "", level: "" }); renderBosses(); markDirty();
+    } }, "+ Add boss"));
+  }
+
+  // --- WATCHLIST -----------------------------------------------------------
+  function renderWatchlist() {
+    var p = document.getElementById("watchPanel");
+    p.innerHTML = "";
+    p.append(h("h2", {}, "👁️ Watchlist ", h("span", { class: "muted" }, "(extra webhooks — all timings)")));
+    state.watchlist.forEach(function (w) {
+      var card = h("div", { class: "card" });
+      card.append(h("div", { class: "rowline" },
+        h("div", { class: "grow2" }, h("label", {}, "Label"),
+          h("input", { type: "text", value: w.label, placeholder: "My Telegram",
+            oninput: function (e) { w.label = e.target.value; markDirty(); } })),
+        h("div", {}, h("label", {}, "Type"),
+          h("select", { onchange: function (e) { w.kind = e.target.value; renderWatchlist(); markDirty(); } },
+            [["discord", "Discord"], ["telegram", "Telegram"]].map(function (o) {
+              return h("option", { value: o[0], selected: w.kind === o[0] ? "selected" : null }, o[1]);
+            }))),
+        h("button", { class: "sm danger", onclick: function () { removeById(state.watchlist, w.id); renderWatchlist(); markDirty(); } }, "✕")
+      ));
+      if (w.kind === "telegram") {
+        card.append(h("div", { class: "rowline", style: "margin-top:6px" },
+          h("div", { class: "grow2" }, h("label", {}, "Bot token"),
+            h("input", { type: "text", value: w.botToken, placeholder: "123:ABC...",
+              oninput: function (e) { w.botToken = e.target.value; markDirty(); } })),
+          h("div", {}, h("label", {}, "Chat id"),
+            h("input", { type: "text", class: "small", value: w.chatId, placeholder: "123456",
+              oninput: function (e) { w.chatId = e.target.value; markDirty(); } }))
+        ));
+      } else {
+        card.append(h("div", {}, h("label", {}, "Discord webhook URL"),
+          h("input", { type: "text", value: w.url, placeholder: "https://discord.com/api/webhooks/...",
+            oninput: function (e) { w.url = e.target.value; markDirty(); } })));
+      }
+      card.append(h("div", { style: "margin-top:8px; display:flex; gap:16px; flex-wrap:wrap" },
+        h("label", { class: "inline" }, h("input", { type: "checkbox", checked: w.receiveAnnouncement,
+          onchange: function (e) { w.receiveAnnouncement = e.target.checked; markDirty(); } }), "Gets announcements"),
+        h("label", { class: "inline" }, h("input", { type: "checkbox", checked: w.receiveReminders,
+          onchange: function (e) { w.receiveReminders = e.target.checked; markDirty(); } }), "Gets reminders")
+      ));
+      p.append(card);
+    });
+    p.append(h("button", { class: "add", onclick: function () {
+      state.watchlist.push({ id: uid(), label: "", kind: "telegram", url: "", botToken: "", chatId: "", receiveAnnouncement: false, receiveReminders: true });
+      renderWatchlist(); markDirty();
+    } }, "+ Add watch target"));
+  }
+
+  function removeById(arr, id) {
+    var i = arr.findIndex(function (x) { return x.id === id; });
+    if (i !== -1) arr.splice(i, 1);
+  }
+
+  function renderAll() {
+    renderStatus();
+    renderSettings();
+    renderSchedule();
+    renderGuilds();
+    renderBosses();
+    renderWatchlist();
+  }
+
+  // --- ANNOUNCE modal ------------------------------------------------------
+  function openAnnounce() {
+    var modal = document.getElementById("modal");
+    var mode = state.settings.sendMode;
+    var targetIds = state.guilds.map(function (g) { return g.id; });
+
+    function draw() {
+      modal.innerHTML = "";
+      modal.append(
+        h("h2", {}, "📣 Announce schedule"),
+        h("p", { class: "muted" }, "Posts the current saved schedule now. (Save first if you just edited.)"),
+        h("label", {}, "Mode"),
+        h("select", { onchange: function (e) { mode = e.target.value; draw(); } },
+          [["per_guild", "Per-guild (each channel its own bosses)"],
+           ["concatenated", "Concatenated (full schedule to selected channels)"]].map(function (o) {
+            return h("option", { value: o[0], selected: mode === o[0] ? "selected" : null }, o[1]);
+          })),
+        mode === "concatenated" ? h("div", {},
+          h("label", {}, "Send full schedule to"),
+          h("div", { class: "guildchecks" }, state.guilds.map(function (g) {
+            return h("label", {}, h("input", { type: "checkbox", checked: targetIds.indexOf(g.id) !== -1,
+              onchange: function (e) {
+                if (e.target.checked) { if (targetIds.indexOf(g.id) === -1) targetIds.push(g.id); }
+                else targetIds = targetIds.filter(function (id) { return id !== g.id; });
+              } }), g.name || "(unnamed)");
+          }))
+        ) : null,
+        h("div", { id: "announceResult" }),
+        h("div", { class: "rowline", style: "margin-top:14px" },
+          h("button", { onclick: function () { runAnnounce(false); } }, "Preview"),
+          h("button", { class: "ghost", onclick: closeModal }, "Close")
+        )
+      );
     }
-    show($("resultPanel"));
-  }
 
-  function doCancel() {
-    currentPendingId = null;
-    hide($("previewPanel"));
-  }
+    async function runAnnounce(send) {
+      var box = document.getElementById("announceResult");
+      box.innerHTML = "<p class='muted'>working…</p>";
+      var res = await fetch("/api/announce", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: mode, targetGuildIds: targetIds, dryRun: !send }),
+      });
+      var data = await res.json();
+      if (!res.ok) { box.innerHTML = "<p class='status fail'>" + (data.error || "failed") + "</p>"; return; }
+      box.innerHTML = "";
+      if (!send) {
+        if (!data.plan.length) { box.append(h("p", { class: "status fail" }, "Nothing would be sent — check webhooks/assignments.")); return; }
+        data.plan.forEach(function (it) {
+          box.append(h("div", { class: "previewitem" }, h("div", { class: "to" }, "→ " + it.label), h("pre", {}, it.message)));
+        });
+        box.append(h("button", { class: "confirm", style: "margin-top:10px", onclick: function () { runAnnounce(true); } }, "Confirm & Send"));
+      } else {
+        (data.statuses || []).forEach(function (s) {
+          box.append(h("div", { class: "status " + (s.ok ? "ok" : "fail") },
+            h("span", {}, (s.ok ? "✓ " : "✗ ") + s.destination), h("span", {}, s.detail)));
+        });
+        toast(data.allOk ? "Announced" : "Some deliveries failed", data.allOk ? "ok" : "err");
+      }
+    }
 
-  function doClear() {
-    $("raw").value = "";
-    clearError();
-    hide($("previewPanel"));
-    hide($("resultPanel"));
+    draw();
+    document.getElementById("overlay").classList.add("show");
   }
+  function closeModal() { document.getElementById("overlay").classList.remove("show"); }
 
   // --- wire up -------------------------------------------------------------
-  $("previewBtn").addEventListener("click", doPreview);
-  $("confirmBtn").addEventListener("click", doConfirm);
-  $("cancelBtn").addEventListener("click", doCancel);
-  $("clearBtn").addEventListener("click", doClear);
+  document.getElementById("saveBtn").addEventListener("click", save);
+  document.getElementById("announceBtn").addEventListener("click", async function () {
+    if (dirty) { await save(); }
+    openAnnounce();
+  });
+  document.getElementById("overlay").addEventListener("click", function (e) {
+    if (e.target.id === "overlay") closeModal();
+  });
+
+  load().catch(function (e) { toast("Failed to load: " + e.message, "err"); });
 </script>

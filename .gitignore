@@ -14,3 +14,8 @@ Thumbs.db
 
 # Self - post-example
 post-example.txt
+
+# Reminder store (runtime data)
+data/
+
+scratch_rem_test.mjs
