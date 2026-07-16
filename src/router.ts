@@ -18,7 +18,7 @@ import {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
 } from "./config.js";
-import type { Announcement, Target, ValidationResult } from "./types.js";
+import type { Announcement, ValidationResult } from "./types.js";
 
 // --- Delivery plan types ---------------------------------------------------
 
@@ -45,30 +45,72 @@ export interface DeliveryPlan {
 
 // --- Message formatting ----------------------------------------------------
 
+/** One boss line for a specific guild: which group it's in, its time, content. */
+interface GuildEntry {
+  header: string;
+  time: string;
+  content: string;
+}
+
 /**
- * Format the per-guild Discord message per CLAUDE.md:
- *
- *   {rolePing if present} **{header}**
- *   Time = {time}        (omitted when time is "")
- *   Target: {content}
+ * Collect everything a single guild should be told, across ALL groups in the
+ * announcement. Only known-guild, non-empty-content lines are included (invalid
+ * ones are handled by the needs-review path).
  */
-export function formatDiscordMessage(
-  announcement: Announcement,
-  target: Target,
-  rolePing: string | undefined,
-): string {
-  const lines: string[] = [];
-
-  const pingPrefix = rolePing ? `${rolePing} ` : "";
-  lines.push(`${pingPrefix}**${announcement.header}**`);
-
-  if (announcement.time !== "") {
-    lines.push(`Time = ${announcement.time}`);
+function entriesForGuild(announcement: Announcement, guild: string): GuildEntry[] {
+  const entries: GuildEntry[] = [];
+  for (const group of announcement.groups) {
+    for (const target of group.targets) {
+      if (target.guild === guild && target.content.trim() !== "") {
+        entries.push({ header: group.header, time: group.time, content: target.content });
+      }
+    }
   }
+  return entries;
+}
 
-  lines.push(`Target: ${target.content}`);
+/** Build the "mention + rolePing" prefix line, or "" if neither is present. */
+function prefixLine(mention: string, rolePing: string | undefined): string {
+  return [mention, rolePing].filter((s) => s && s.trim() !== "").join(" ");
+}
 
-  return lines.join("\n");
+/**
+ * Format one guild's Discord message. It carries the global mention (e.g. @here)
+ * and title once at the top, then a block per boss group relevant to that guild:
+ *
+ *   {mention} {rolePing}
+ *   **{title}**
+ *
+ *   **{group header}**
+ *   Time = {time}         (omitted when time is "")
+ *   Target: {content}
+ *
+ *   **{next group header}**
+ *   ...
+ */
+export function formatGuildMessage(
+  announcement: Announcement,
+  rolePing: string | undefined,
+  entries: GuildEntry[],
+): string {
+  const topLines: string[] = [];
+  const prefix = prefixLine(announcement.mention, rolePing);
+  if (prefix !== "") topLines.push(prefix);
+  if (announcement.title !== "") topLines.push(`**${announcement.title}**`);
+
+  const blocks = entries.map(function block(entry) {
+    const b: string[] = [];
+    if (entry.header !== "") b.push(`**${entry.header}**`);
+    if (entry.time !== "") b.push(`Time = ${entry.time}`);
+    b.push(`Target: ${entry.content}`);
+    return b.join("\n");
+  });
+
+  // Top block (mention/title) and each group block separated by a blank line.
+  const sections: string[] = [];
+  if (topLines.length > 0) sections.push(topLines.join("\n"));
+  sections.push(...blocks);
+  return sections.join("\n\n");
 }
 
 /**
@@ -82,13 +124,14 @@ export function formatNeedsReviewMessage(result: ValidationResult): string {
 
   lines.push("⚠️ **Announcement needs review** ⚠️");
   lines.push(`Type: ${announcement.type}`);
-  if (announcement.header !== "") lines.push(`Header: ${announcement.header}`);
-  if (announcement.time !== "") lines.push(`Time: ${announcement.time}`);
+  if (announcement.title !== "") lines.push(`Title: ${announcement.title}`);
+  if (announcement.mention !== "") lines.push(`Mention: ${announcement.mention}`);
 
-  if (announcement.targets.length > 0) {
-    lines.push("Targets:");
-    for (const t of announcement.targets) {
-      lines.push(`  • ${t.guild || "(no guild)"} = ${t.content || "(empty)"}`);
+  for (const group of announcement.groups) {
+    const timeSuffix = group.time !== "" ? ` (Time = ${group.time})` : "";
+    lines.push(`▸ ${group.header || "(no header)"}${timeSuffix}`);
+    for (const t of group.targets) {
+      lines.push(`    • ${t.guild || "(no guild)"} = ${t.content || "(empty)"}`);
     }
   }
 
@@ -104,93 +147,74 @@ export function formatNeedsReviewMessage(result: ValidationResult): string {
 
 /**
  * Format the developer's personal Telegram copy: the full announcement
- * (header + time + every target) in one message.
+ * (mention + title + every group + every target) in one message.
  */
 export function formatTelegramMessage(announcement: Announcement): string {
   const lines: string[] = [];
 
-  if (announcement.header !== "") lines.push(announcement.header);
-  if (announcement.time !== "") lines.push(`Time = ${announcement.time}`);
+  if (announcement.mention !== "") lines.push(announcement.mention);
+  if (announcement.title !== "") lines.push(announcement.title);
 
-  for (const t of announcement.targets) {
-    lines.push(`${t.guild}: ${t.content}`);
+  for (const group of announcement.groups) {
+    lines.push(""); // blank separator before each group
+    const timeSuffix = group.time !== "" ? ` — ${group.time}` : "";
+    lines.push(`${group.header}${timeSuffix}`.trim());
+    for (const t of group.targets) {
+      lines.push(`${t.guild}: ${t.content}`);
+    }
   }
 
   // Fallback so we never send an empty Telegram message.
-  if (lines.length === 0) lines.push("(empty announcement)");
-
-  return lines.join("\n");
+  const text = lines.join("\n").trim();
+  return text === "" ? "(empty announcement)" : text;
 }
 
 // --- Planning --------------------------------------------------------------
 
 /**
- * Decide whether a single target may post to its LIVE guild channel. Anything
- * that fails here is diverted to #needs-review instead. This mirrors the
- * validation gate but at per-target granularity so good targets in a partly
- * broken announcement still get delivered (never silently dropped).
- */
-function targetIsLive(announcement: Announcement, target: Target): boolean {
-  if (announcement.type === "other") return false;
-  if (!KNOWN_GUILDS.includes(target.guild)) return false;
-  if (target.content.trim() === "") return false;
-  return true;
-}
-
-/** The webhook URLs a live target fans out to (its guild's channel list). */
-function channelsForTarget(guild: string): string[] {
-  const route = ROUTES[guild];
-  if (route === undefined) return [];
-  return route.webhooks;
-}
-
-/**
  * Build the full delivery plan from a validated result. Pure and deterministic:
  * called by /preview to describe, and by /confirm to execute.
+ *
+ * One message is built PER GUILD, gathering that guild's boss lines from every
+ * group in the announcement. Invalid content (unknown guild, empty content, a
+ * non-boss type) is not sent live — it's captured by the single #needs-review
+ * post so nothing is silently dropped.
  */
 export function planDeliveries(result: ValidationResult): DeliveryPlan {
   const { announcement } = result;
   const discord: PlannedDiscordPost[] = [];
   const planNotes: string[] = [];
 
-  // Track whether we need a single #needs-review post (for diverted targets or
-  // an announcement-level problem).
-  let anyDiverted = false;
+  // needsReview from validation already covers unknown guild / empty content /
+  // type "other"; we may add to it if a known guild has no webhook configured.
+  let needsReview = result.needsReview;
 
-  for (const target of announcement.targets) {
-    if (targetIsLive(announcement, target)) {
-      const route = ROUTES[target.guild]!; // known guild -> route exists
-      const urls = channelsForTarget(target.guild);
+  // Only route live if this is actually a boss announcement.
+  if (announcement.type !== "other") {
+    for (const guild of KNOWN_GUILDS) {
+      const entries = entriesForGuild(announcement, guild);
+      if (entries.length === 0) continue; // nothing for this guild today
 
+      const route = ROUTES[guild]!; // known guild -> route exists
+      const urls = route.webhooks;
       if (urls.length === 0) {
-        // Known guild but no webhook configured: don't drop it, divert to
-        // review so it's still visible.
-        anyDiverted = true;
+        // Known guild but no webhook configured: don't drop it, divert to review.
+        needsReview = true;
         planNotes.push(
-          `${target.guild} has no webhook configured; diverting to needs-review.`,
+          `${guild} has no webhook configured; diverting to needs-review.`,
         );
         continue;
       }
 
-      const message = formatDiscordMessage(announcement, target, route.rolePing);
+      const message = formatGuildMessage(announcement, route.rolePing, entries);
       for (const url of urls) {
-        discord.push({
-          label: target.guild,
-          url,
-          message,
-          isNeedsReview: false,
-        });
+        discord.push({ label: guild, url, message, isNeedsReview: false });
       }
-    } else {
-      // This target can't go live — it will be covered by the combined
-      // needs-review post below.
-      anyDiverted = true;
     }
   }
 
-  // If the announcement itself was flagged, or any target was diverted, emit a
-  // single combined needs-review post (when the channel is configured).
-  if (result.needsReview || anyDiverted) {
+  // Single combined needs-review post when anything was flagged/diverted.
+  if (needsReview) {
     if (WEBHOOK_NEEDS_REVIEW) {
       discord.push({
         label: "#needs-review",

@@ -60,32 +60,53 @@ paste-and-confirm step.
 
 ## The operator's input format (typical, but NOT guaranteed)
 
+Usually a whole **daily schedule with several boss groups**, an optional title/date
+line, and often a trailing `@here` mention:
+
 ```
+SCHEDULE FIELD BOSS TODAY 16/07/2026
+
+Novus Boss Group B
+Time = 12:00
+RISEvGGI = Lv. 42 South Dorian Forest
+RISEvEMPEROR = Lv.48 Mecha Wild Beast
+RISEvEMPIRE = Lv.49 Rusty Sickle
+
 Novus Boss Group C
 Time = 18:30
 RISEvGGI = Lv. 50 Forest of Exiles
 RISEvEMPEROR = Lv.52 Mecha Lizard
 RISEvEMPIRE = Lv.62 Prime Draco
+
+THANKKK YOUUU @here
 ```
 
-But the operator is non-technical and freeform. Input may have typos in guild tags
-(e.g. `RISEvGGl` with a lowercase L), inconsistent spacing (`Lv.50` vs `Lv. 50`),
-missing lines, a missing or extra `Time` line, or a completely unstructured
-sentence that isn't a boss announcement at all. The LLM must handle this
-gracefully and the validation gate must catch what it can't. The `Time` line, when
-present, is in-game text that is forwarded verbatim — the app does not schedule
-anything around it.
+Each blank-line-separated block is one boss **group** (its own header + time +
+guild lines). A guild typically appears in several groups. But the operator is
+non-technical and freeform. Input may have typos in guild tags (e.g. `RISEvGGl`
+with a lowercase L), inconsistent spacing (`Lv.50` vs `Lv. 50`), missing lines, a
+missing/extra `Time` line, non-guild target lines (e.g. `Anka 2 = ...`), or a
+completely unstructured sentence that isn't a boss announcement at all. The LLM
+must handle this gracefully and the validation gate must catch what it can't.
+
+- `Time`, when present, is in-game text forwarded verbatim (just the value, e.g.
+  `12:00`) — the app does not schedule anything around it.
+- A mention like `@here`/`@everyone` must be preserved and re-posted so it pings.
 
 ## Target JSON schema (the LLM must output exactly this)
 
 ```ts
 interface Announcement {
   type: "boss" | "other";  // "boss" = a parseable boss announcement to forward
-  header: string;          // shared boss name / group; "" if none
-  time: string;            // optional in-game time text, forwarded as-is; "" if none
-  targets: Array<{
-    guild: string;         // e.g. "RISEvGGI"
-    content: string;       // e.g. "Lv. 50 Forest of Exiles"
+  title: string;           // overall schedule title / date line; "" if none
+  mention: string;         // global mention to prepend, e.g. "@here"; "" if none
+  groups: Array<{
+    header: string;        // group name, e.g. "Novus Boss Group C"; "" if none
+    time: string;          // JUST the value, e.g. "18:30" (no "Time ="); "" if none
+    targets: Array<{
+      guild: string;       // e.g. "RISEvGGI"
+      content: string;     // e.g. "Lv. 50 Forest of Exiles"
+    }>;
   }>;
 }
 ```
@@ -95,18 +116,35 @@ Example:
 ```json
 {
   "type": "boss",
-  "header": "Novus Boss Group C",
-  "time": "18:30",
-  "targets": [
-    { "guild": "RISEvGGI",     "content": "Lv. 50 Forest of Exiles" },
-    { "guild": "RISEvEMPEROR", "content": "Lv. 52 Mecha Lizard" },
-    { "guild": "RISEvEMPIRE",  "content": "Lv. 62 Prime Draco" }
+  "title": "SCHEDULE FIELD BOSS TODAY 16/07/2026",
+  "mention": "@here",
+  "groups": [
+    {
+      "header": "Novus Boss Group B",
+      "time": "12:00",
+      "targets": [
+        { "guild": "RISEvGGI",     "content": "Lv. 42 South Dorian Forest" },
+        { "guild": "RISEvEMPEROR", "content": "Lv. 48 Mecha Wild Beast" },
+        { "guild": "RISEvEMPIRE",  "content": "Lv. 49 Rusty Sickle" }
+      ]
+    },
+    {
+      "header": "Novus Boss Group C",
+      "time": "18:30",
+      "targets": [
+        { "guild": "RISEvGGI",     "content": "Lv. 50 Forest of Exiles" },
+        { "guild": "RISEvEMPEROR", "content": "Lv. 52 Mecha Lizard" },
+        { "guild": "RISEvEMPIRE",  "content": "Lv. 62 Prime Draco" }
+      ]
+    }
   ]
 }
 ```
 
-- `targets` is empty if the message can't be parsed as a boss announcement (then
+- `groups` is empty if the message can't be parsed as a boss announcement (then
   `type` is `"other"`).
+- One element of `groups` per boss block; a guild may appear in many groups. The
+  router aggregates each guild's lines from all groups into ONE message.
 - Prompt the LLM to return ONLY this JSON, no markdown fences, no prose. Use the
   Groq/OpenAI `response_format: { type: "json_object" }` option to force valid
   JSON (the prompt must mention "JSON"), then parse and validate it against a
@@ -182,21 +220,32 @@ silently drop a time-critical announcement.
 
 ## Message formatting (Discord)
 
-Per target channel:
+ONE message per guild, aggregating that guild's lines from every group. The global
+mention (e.g. `@here`) and config `rolePing` go on the first line; the title once
+below it; then a block per group:
 
 ```
-{rolePing if present} **{header}**
-Time = {time}      <- omit this line if time === ""
+{mention} {rolePing}          <- omit line if both empty
+**{title}**                   <- omit line if title === ""
+
+**{group header}**
+Time = {time}                 <- omit this line if time === ""
+Target: {content}
+
+**{next group header}**
+Time = {time}
 Target: {content}
 ```
 
-Discord webhook POST body: `{ "content": "<the message above>" }`.
+Discord webhook POST body: `{ "content": "<the message above>" }`. (Webhooks can
+ping `@here`/`@everyone`/roles in `content` by default, which is how the mention
+works.)
 
 ## Telegram (developer's personal copy)
 
-Send the full announcement (header + time + all targets) to a fixed chat_id via
-the Bot API `sendMessage`. Single call, separate from the per-guild Discord
-routing. Endpoint: `https://api.telegram.org/bot<TOKEN>/sendMessage` with
+Send the full announcement (mention + title + all groups + all targets) to a fixed
+chat_id via the Bot API `sendMessage`. Single call, separate from the per-guild
+Discord routing. Endpoint: `https://api.telegram.org/bot<TOKEN>/sendMessage` with
 `{ chat_id, text }`.
 
 ## Config / secrets (env vars, via a .env file — never commit real values)

@@ -10,7 +10,7 @@
 // NOT decide whether the result is trustworthy — that is validate.ts's job.
 
 import { GROQ_URL, GROQ_MODEL, GROQ_API_KEY, KNOWN_GUILDS } from "./config.js";
-import type { Announcement } from "./types.js";
+import type { Announcement, BossGroup, Target } from "./types.js";
 
 // How long we are willing to wait on the API before giving up. Boss alerts are
 // time-critical, so a hung request should surface as an error the operator can
@@ -30,24 +30,37 @@ function buildSystemPrompt(): string {
   const knownGuildList = KNOWN_GUILDS.join(", ");
 
   return [
-    "You convert a raw, freeform game boss announcement into a strict JSON object.",
+    "You convert a raw, freeform game boss announcement (often a whole daily",
+    "schedule with MANY boss groups) into a strict JSON object.",
     "",
     "Output ONLY a JSON object with EXACTLY these keys:",
     '  "type":    one of "boss", "other"',
-    '  "header":  string — the shared boss name / group line; "" if none',
-    '  "time":    string — the in-game time text exactly as written; "" if none',
-    '  "targets": array of objects, each { "guild": string, "content": string }',
+    '  "title":   string — the overall schedule title / date line if any; "" if none',
+    '  "mention": string — any @here, @everyone, or @role mention in the text that',
+    '             should be re-posted; "" if none',
+    '  "groups":  array of boss groups, each an object:',
+    '               { "header": string, "time": string,',
+    '                 "targets": [ { "guild": string, "content": string } ] }',
     "",
     "Rules:",
-    '- "boss" is any parseable boss announcement (with or without a time).',
-    '- If the text is not a boss announcement at all, use "other" and an empty targets array.',
-    '- "time" is just forwarded text (e.g. a spawn time). Copy it as-is if present;',
-    '  do not invent or reformat it. Use "" when the message has no time.',
+    '- "boss" is any parseable boss announcement or schedule. Use "other" with an',
+    "  empty groups array only if the text is not a boss announcement at all.",
+    "- The input usually has SEVERAL boss groups. Each group is a block: a header",
+    "  line (e.g. \"Novus Boss Group B\"), a time line, and one or more guild lines.",
+    "  Produce ONE element of \"groups\" per such block. Do NOT merge them.",
+    '- "header" is the group name line for that block; "" if none.',
+    '- "time" is JUST the time value, e.g. "12:00". Do NOT include the word "Time"',
+    '  or "=" — strip any "Time =" prefix. Keep extra notes like "(stand by 19:30)"',
+    '  out of "time"; put them in the target content if relevant. "" if no time.',
     `- The known guild tags are: ${knownGuildList}.`,
     "  Correct obvious typos in guild tags to the closest known tag",
-    "  (for example a lowercase L or O mistaken for I).",
+    "  (for example a lowercase L or O mistaken for I). If a line's tag is clearly",
+    "  not one of these (e.g. a party/other name), keep it as written — validation",
+    "  will route it for review.",
     '- "content" is what goes to that guild, e.g. "Lv. 50 Forest of Exiles".',
     "  Normalize spacing so it reads cleanly (e.g. \"Lv.50\" -> \"Lv. 50\").",
+    "- Ignore decorative lines (greetings, \"thank you\", separators) EXCEPT that any",
+    '  mention such as @here goes into "mention".',
     "- Do NOT invent guilds, times, or content that are not in the input.",
     "- Return raw JSON only. No markdown code fences, no commentary.",
   ].join("\n");
@@ -146,12 +159,46 @@ function parseJsonLoosely(raw: string): unknown {
 }
 
 /**
+ * Strip a leading "Time =" / "Time:" prefix the model sometimes leaves on the
+ * time value, so we don't end up formatting "Time = Time = 12:00".
+ */
+function cleanTime(raw: string): string {
+  return raw.replace(/^\s*time\s*[:=]?\s*/i, "").trim();
+}
+
+/** Coerce one raw group object into a typed BossGroup. */
+function coerceGroup(item: unknown): BossGroup {
+  const obj = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+
+  const header = typeof obj.header === "string" ? obj.header.trim() : "";
+  const time = cleanTime(typeof obj.time === "string" ? obj.time : "");
+
+  const targets: Target[] = [];
+  if (Array.isArray(obj.targets)) {
+    for (const t of obj.targets) {
+      if (typeof t !== "object" || t === null) continue;
+      const rec = t as Record<string, unknown>;
+      const guild = typeof rec.guild === "string" ? rec.guild.trim() : "";
+      const content = typeof rec.content === "string" ? rec.content.trim() : "";
+      // Keep the target even if a field is empty — validate.ts needs to see and
+      // report the problem rather than us silently dropping a time-critical line.
+      targets.push({ guild, content });
+    }
+  }
+
+  return { header, time, targets };
+}
+
+/**
  * Coerce whatever the model returned into an `Announcement`-shaped object.
  *
  * This is NOT the validation gate — it only normalizes the raw parsed JSON into
- * the right *shape* with the right *types* (strings are strings, targets is an
- * array of {guild, content}). Semantic correctness (known guild, non-empty
- * content) is enforced later in validate.ts.
+ * the right *shape* with the right *types*. Semantic correctness (known guild,
+ * non-empty content) is enforced later in validate.ts.
+ *
+ * We also accept a couple of legacy/loose shapes defensively: a top-level
+ * `targets` array (single-group form) or a top-level `header`/`time` are folded
+ * into a single group so an older-style model reply still works.
  */
 function coerceToAnnouncement(parsed: unknown): Announcement {
   if (typeof parsed !== "object" || parsed === null) {
@@ -164,23 +211,18 @@ function coerceToAnnouncement(parsed: unknown): Announcement {
   const rawType = typeof obj.type === "string" ? obj.type : "other";
   const type = rawType === "boss" ? "boss" : "other";
 
-  const header = typeof obj.header === "string" ? obj.header : "";
-  const time = typeof obj.time === "string" ? obj.time : "";
+  const title = typeof obj.title === "string" ? obj.title.trim() : "";
+  const mention = typeof obj.mention === "string" ? obj.mention.trim() : "";
 
-  const targets: Announcement["targets"] = [];
-  if (Array.isArray(obj.targets)) {
-    for (const item of obj.targets) {
-      if (typeof item !== "object" || item === null) continue;
-      const t = item as Record<string, unknown>;
-      const guild = typeof t.guild === "string" ? t.guild.trim() : "";
-      const content = typeof t.content === "string" ? t.content.trim() : "";
-      // Keep the target even if a field is empty — validate.ts needs to see and
-      // report the problem rather than us silently dropping a time-critical line.
-      targets.push({ guild, content });
-    }
+  const groups: BossGroup[] = [];
+  if (Array.isArray(obj.groups)) {
+    for (const g of obj.groups) groups.push(coerceGroup(g));
+  } else if (Array.isArray(obj.targets)) {
+    // Loose single-group fallback: {header, time, targets} at the top level.
+    groups.push(coerceGroup(obj));
   }
 
-  return { type, header: header.trim(), time: time.trim(), targets };
+  return { type, title, mention, groups };
 }
 
 /**

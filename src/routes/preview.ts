@@ -24,7 +24,7 @@ const previewBodySchema = {
   required: ["raw"],
   additionalProperties: false,
   properties: {
-    raw: { type: "string", minLength: 1, maxLength: 5000 },
+    raw: { type: "string", minLength: 1, maxLength: 10000 },
   },
 } as const;
 

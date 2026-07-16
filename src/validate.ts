@@ -102,37 +102,44 @@ export function validateAnnouncement(announcement: Announcement): ValidationResu
     needsReview = true;
   }
 
-  // --- targets -------------------------------------------------------------
-  if (announcement.type !== "other" && announcement.targets.length === 0) {
+  // --- groups / targets ----------------------------------------------------
+  const totalTargets = announcement.groups.reduce(
+    (sum, group) => sum + group.targets.length,
+    0,
+  );
+  if (announcement.type !== "other" && totalTargets === 0) {
     warnings.push({
       level: "error",
-      message: "No targets were parsed from the announcement.",
+      message: "No boss groups / targets were parsed from the announcement.",
     });
     needsReview = true;
   }
 
-  announcement.targets.forEach(function checkTarget(target, index) {
-    // guild must be known.
-    if (!KNOWN_GUILDS.includes(target.guild)) {
-      const suggestion = suggestGuild(target.guild);
-      const hint = suggestion ? ` Did you mean "${suggestion}"?` : "";
-      warnings.push({
-        level: "error",
-        targetIndex: index,
-        message: `Unknown guild "${target.guild}".${hint}`,
-      });
-      needsReview = true;
-    }
+  announcement.groups.forEach(function checkGroup(group) {
+    // A short label so warnings point at the right block.
+    const where = group.header ? `[${group.header}] ` : "";
 
-    // content must be non-empty.
-    if (target.content.trim() === "") {
-      warnings.push({
-        level: "error",
-        targetIndex: index,
-        message: `Target for "${target.guild || "(no guild)"}" has empty content.`,
-      });
-      needsReview = true;
-    }
+    group.targets.forEach(function checkTarget(target) {
+      // guild must be known.
+      if (!KNOWN_GUILDS.includes(target.guild)) {
+        const suggestion = suggestGuild(target.guild);
+        const hint = suggestion ? ` Did you mean "${suggestion}"?` : "";
+        warnings.push({
+          level: "error",
+          message: `${where}Unknown guild "${target.guild}".${hint}`,
+        });
+        needsReview = true;
+      }
+
+      // content must be non-empty.
+      if (target.content.trim() === "") {
+        warnings.push({
+          level: "error",
+          message: `${where}Target for "${target.guild || "(no guild)"}" has empty content.`,
+        });
+        needsReview = true;
+      }
+    });
   });
 
   return { announcement, warnings, needsReview };
