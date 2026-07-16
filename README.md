@@ -99,7 +99,7 @@ Type=simple
 User=boss
 WorkingDirectory=/opt/boss-router
 ExecStart=/usr/bin/node dist/server.js
-EnvironmentFile=/opt/boss-router/.env
+EnvironmentFile=-/opt/boss-router/.env   # leading "-" = optional (env is not required)
 Restart=on-failure
 RestartSec=3
 

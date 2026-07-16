@@ -186,7 +186,9 @@ Type=simple
 User=boss
 WorkingDirectory=/home/boss/boss-router
 ExecStart=/usr/bin/node dist/server.js
-EnvironmentFile=/home/boss/boss-router/.env
+# Leading "-" = optional: don't fail to start if .env is absent (all env vars
+# have sensible defaults). Create .env if you want to override HOST/PORT/paths.
+EnvironmentFile=-/home/boss/boss-router/.env
 Restart=on-failure
 RestartSec=3
 
