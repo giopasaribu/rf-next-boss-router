@@ -59,9 +59,13 @@ export function sortedSchedule(db: DB): Timing[] {
 }
 
 function guildDestinations(guild: Guild): Destination[] {
-  return guild.webhooks
-    .filter((w) => w.url.trim() !== "")
-    .map((w) => ({ kind: "discord" as const, label: `${guild.name} · ${w.label || "webhook"}`, url: w.url }));
+  const live = guild.webhooks.filter((w) => w.url.trim() !== "");
+  // Label by guild name; disambiguate with an index only when there are several.
+  return live.map((w, i) => ({
+    kind: "discord" as const,
+    label: live.length > 1 ? `${guild.name} (${i + 1})` : guild.name,
+    url: w.url,
+  }));
 }
 
 function watchDestination(w: WatchTarget): Destination | null {

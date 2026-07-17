@@ -6,7 +6,6 @@
 /** A Discord webhook belonging to a guild. */
 export interface Webhook {
   id: string;
-  label: string; // e.g. "#boss-alerts"
   url: string;
 }
 

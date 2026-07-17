@@ -10,13 +10,13 @@ import { loadDb } from "./db.js";
 import { planReminder } from "./messages.js";
 import { deliver } from "./sender.js";
 import { hasFired, markFired } from "./fired.js";
-import { parseHhmm, spawnEpochToday, wibDayKey } from "./wib.js";
+import { parseHhmm, spawnEpochForCycle, cycleKey } from "./wib.js";
 
 const TICK_MS = 30_000;
 
 async function tick(log: FastifyBaseLogger): Promise<void> {
   const now = Date.now();
-  const day = wibDayKey(now);
+  const day = cycleKey(now); // current game day (03:00 WIB reset)
   const db = loadDb();
   const leadMs = db.settings.reminderLeadMinutes * 60 * 1000;
 
@@ -25,12 +25,12 @@ async function tick(log: FastifyBaseLogger): Promise<void> {
     const parsed = parseHhmm(timing.time);
     if (!parsed) continue;
 
-    const spawnAt = spawnEpochToday(parsed.hh, parsed.mm, now);
+    const spawnAt = spawnEpochForCycle(parsed.hh, parsed.mm, now);
     const fireAt = spawnAt - leadMs;
 
     if (now < fireAt) continue; // not time yet
-    if (now >= spawnAt) continue; // spawn already passed today — missed window
-    if (hasFired(day, timing.id)) continue; // already fired today
+    if (now >= spawnAt) continue; // spawn already passed this cycle — missed window
+    if (hasFired(day, timing.id)) continue; // already fired this game day
 
     const plan = planReminder(db, timing, db.settings.reminderLeadMinutes);
     // Mark fired regardless of send outcome: one reminder per group, no retry

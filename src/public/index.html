@@ -100,7 +100,7 @@
   <span class="muted">times are UTC+7 (WIB)</span>
   <span class="grow"></span>
   <span id="saveStatus" class="status"></span>
-  <button id="saveBtn" class="secondary">Save</button>
+  <button id="saveBtn" class="secondary">💾 Save all</button>
   <button id="announceBtn">Announce…</button>
 </div>
 
@@ -167,11 +167,28 @@
     renderAll();
   }
   async function save() {
-    var res = await fetch("/api/state", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state),
-    });
-    if (res.ok) { dirty = false; renderStatus(); toast("Saved", "ok"); }
-    else { toast("Save failed", "err"); }
+    try {
+      var res = await fetch("/api/state", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state),
+      });
+      if (res.ok) { dirty = false; renderStatus(); toast("Saved", "ok"); return true; }
+      var msg = "Save failed (HTTP " + res.status + ")";
+      try { var d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+      toast(msg, "err");
+      return false;
+    } catch (e) {
+      toast("Save failed: " + e.message, "err");
+      return false;
+    }
+  }
+
+  // A section header with its own Save button (saves the whole document; it's one
+  // JSON file, so saving from any section persists everything safely).
+  function sectionHeader(title, subtitle) {
+    return h("h2", {}, title,
+      subtitle ? h("span", { class: "muted" }, subtitle) : null,
+      h("span", { style: "flex:1" }),
+      h("button", { class: "sm secondary", onclick: function () { save(); } }, "💾 Save"));
   }
 
   // --- SETTINGS ------------------------------------------------------------
@@ -180,7 +197,7 @@
     p.innerHTML = "";
     var s = state.settings;
     p.append(
-      h("h2", {}, "⚙️ Settings"),
+      sectionHeader("⚙️ Settings"),
       h("div", { class: "rowline" },
         h("div", { class: "grow2" },
           h("label", {}, "Reminder — how long before spawn"),
@@ -212,7 +229,7 @@
   function renderSchedule() {
     var p = document.getElementById("schedulePanel");
     p.innerHTML = "";
-    p.append(h("h2", {}, "🗓️ Schedule ", h("span", { class: "muted" }, "(recurring daily)")));
+    p.append(sectionHeader("🗓️ Schedule ", "resets 03:00 WIB — a timing 00:00–02:59 counts as today"));
 
     if (state.schedule.length === 0) p.append(h("p", { class: "muted" }, "No timings yet. Add one below."));
 
@@ -269,6 +286,7 @@
     });
     bossSel.append(h("option", { value: "__custom", selected: matched ? null : "selected" }, "— custom —"));
 
+    // Boss, Name, Level and Guilds all on one aligned row.
     fields.append(
       h("div", { class: "rowline" },
         h("div", { class: "grow2" }, h("label", {}, "Boss"), bossSel),
@@ -277,10 +295,9 @@
             oninput: function (e) { spawn.bossName = e.target.value; markDirty(); } })),
         h("div", {}, h("label", {}, "Level"),
           h("input", { type: "text", class: "small", value: spawn.level, placeholder: "61",
-            oninput: function (e) { spawn.level = e.target.value; markDirty(); } }))
-      ),
-      h("label", {}, "Assigned guilds"),
-      renderGuildChecks(spawn)
+            oninput: function (e) { spawn.level = e.target.value; markDirty(); } })),
+        h("div", {}, h("label", {}, "Guilds"), renderGuildSelect(spawn))
+      )
     );
 
     row.append(fields,
@@ -288,28 +305,29 @@
     return row;
   }
 
-  function renderGuildChecks(spawn) {
-    var box = h("div", { class: "guildchecks" });
-    if (state.guilds.length === 0) return h("span", { class: "muted" }, "no guilds yet — add some below");
+  // Multi-select listbox for assigning guilds to a spawn.
+  function renderGuildSelect(spawn) {
+    if (state.guilds.length === 0) return h("span", { class: "muted" }, "add guilds first");
+    var sel = h("select", { multiple: "multiple",
+      size: Math.min(Math.max(state.guilds.length, 2), 4),
+      style: "width:170px",
+      onchange: function (e) {
+        spawn.guildIds = Array.prototype.map.call(e.target.selectedOptions, function (o) { return o.value; });
+        markDirty();
+      } });
     state.guilds.forEach(function (g) {
-      var checked = spawn.guildIds.indexOf(g.id) !== -1;
-      box.append(h("label", {},
-        h("input", { type: "checkbox", checked: checked, onchange: function (e) {
-          if (e.target.checked) { if (spawn.guildIds.indexOf(g.id) === -1) spawn.guildIds.push(g.id); }
-          else { spawn.guildIds = spawn.guildIds.filter(function (id) { return id !== g.id; }); }
-          markDirty();
-        } }),
-        g.name
-      ));
+      var o = h("option", { value: g.id }, g.name || "(unnamed)");
+      o.selected = spawn.guildIds.indexOf(g.id) !== -1;
+      sel.append(o);
     });
-    return box;
+    return sel;
   }
 
   // --- GUILDS --------------------------------------------------------------
   function renderGuilds() {
     var p = document.getElementById("guildsPanel");
     p.innerHTML = "";
-    p.append(h("h2", {}, "🏰 Guilds & webhooks"));
+    p.append(sectionHeader("🏰 Guilds & webhooks"));
 
     state.guilds.forEach(function (g) {
       var card = h("div", { class: "card" });
@@ -323,9 +341,6 @@
       );
       g.webhooks.forEach(function (w) {
         card.append(h("div", { class: "rowline", style: "margin-top:6px" },
-          h("div", {}, h("label", {}, "Label"),
-            h("input", { type: "text", class: "small", value: w.label, placeholder: "#alerts", style: "width:120px",
-              oninput: function (e) { w.label = e.target.value; markDirty(); } })),
           h("div", { class: "grow2" }, h("label", {}, "Discord webhook URL"),
             h("input", { type: "text", value: w.url, placeholder: "https://discord.com/api/webhooks/...",
               oninput: function (e) { w.url = e.target.value; markDirty(); } })),
@@ -333,7 +348,7 @@
         ));
       });
       card.append(h("button", { class: "sm secondary add", onclick: function () {
-        g.webhooks.push({ id: uid(), label: "", url: "" }); renderGuilds(); markDirty();
+        g.webhooks.push({ id: uid(), url: "" }); renderGuilds(); markDirty();
       } }, "+ Add webhook"));
       p.append(card);
     });
@@ -348,7 +363,7 @@
   function renderBosses() {
     var p = document.getElementById("bossesPanel");
     p.innerHTML = "";
-    p.append(h("h2", {}, "👹 Boss catalog ", h("span", { class: "muted" }, "(reusable)")));
+    p.append(sectionHeader("👹 Boss catalog ", "reusable — pick these when adding a spawn"));
     state.bosses.forEach(function (b) {
       p.append(h("div", { class: "rowline", style: "margin:6px 0" },
         h("div", { class: "grow2" }, h("label", {}, "Boss name"),
@@ -369,7 +384,7 @@
   function renderWatchlist() {
     var p = document.getElementById("watchPanel");
     p.innerHTML = "";
-    p.append(h("h2", {}, "👁️ Watchlist ", h("span", { class: "muted" }, "(extra webhooks — all timings)")));
+    p.append(sectionHeader("👁️ Watchlist ", "extra webhooks — all timings"));
     state.watchlist.forEach(function (w) {
       var card = h("div", { class: "card" });
       card.append(h("div", { class: "rowline" },

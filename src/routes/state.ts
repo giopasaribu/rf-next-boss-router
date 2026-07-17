@@ -18,7 +18,15 @@ const stateRoute: FastifyPluginAsync = async function stateRoute(fastify) {
     if (typeof body !== "object" || body === null) {
       return reply.code(400).send({ error: "Body must be a state object." });
     }
-    saveDb(body);
+    try {
+      saveDb(body);
+    } catch (err) {
+      // Surface the real reason (e.g. a filesystem permission / path error) so
+      // the UI can show it instead of a generic "save failed".
+      const detail = err instanceof Error ? err.message : String(err);
+      request.log.error({ err }, "failed to save state");
+      return reply.code(500).send({ error: `Could not save: ${detail}` });
+    }
     return { ok: true };
   });
 };

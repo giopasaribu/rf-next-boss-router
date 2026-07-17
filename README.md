@@ -31,9 +31,11 @@ you enter structured data; the app formats and sends it.
   - **Per-guild** (default): each guild channel gets only its own bosses.
   - **Concatenated**: the whole schedule (each boss tagged with its guilds) to the
     selected channels.
-- **Reminders** — fire automatically every day, `N` minutes before each timing
+- **Reminders** — fire automatically each game day, `N` minutes before each timing
   (dropdown: 5/10/15/30/60). **One reminder per boss group per channel** — a guild
-  with several bosses at 12:00 gets a single 12:00 reminder listing them all.
+  with several bosses at 12:00 gets a single 12:00 reminder listing them all. The
+  game day resets at **03:00 WIB**, so a timing at 00:00–02:59 counts as that day's
+  late-night boss (fires in the early morning).
 - **Watchlist** — extra webhooks (your Telegram, a monitor channel) that also
   receive announcements and/or reminders for all timings.
 
@@ -138,9 +140,9 @@ src/
 ## Notes
 
 - **Times are UTC+7 (WIB)** everywhere — inputs, messages, reminders.
-- **Reminder timing:** each timing fires once per day at `spawn − lead`. If the
-  process is down through that window, that reminder is skipped (it doesn't fire
-  late after the boss has spawned).
+- **Reminder timing:** each timing fires once per game day (03:00 WIB reset) at
+  `spawn − lead`. If the process is down through that window, that reminder is
+  skipped (it doesn't fire late after the boss has spawned).
 - **Backups:** `data/db.json` is your whole config — back it up. It contains
   secrets, so keep it private (it's gitignored).
 ```

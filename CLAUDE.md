@@ -24,9 +24,14 @@ sends it.
 
 - **Structured data, not parsing.** The UI is CRUD over guilds / bosses / schedule
   / watchlist / settings. No pasting, no LLM.
-- **Recurring daily schedule.** The schedule is a standing template. Reminders
-  fire **every day** at each timing's (spawn − lead), automatically. The maintainer
-  edits it only when the real schedule changes.
+- **Game day = 03:00 WIB reset.** A "day" runs 03:00 → next 02:59 WIB. A timing at
+  00:00–02:59 belongs to the early morning at the END of the current game day
+  (still "today's boss"). See `spawnEpochForCycle`/`cycleKey` in `wib.ts`.
+- **Reminders fire per game day.** The schedule is a standing template; each timing
+  fires ONE reminder at (spawn − lead) each game day, keyed by `cycleKey` for
+  idempotency. Update the schedule daily; it reflects whatever is saved at fire
+  time. (If a strict one-off — auto-stop after one cycle — is ever wanted, that's a
+  change in `scheduler.ts` + fired-log semantics.)
 - **Reminders are auto; the announcement is manual.** "Announce" posts the current
   schedule now (with a preview → confirm in the modal). Reminders need no
   confirmation.
@@ -43,8 +48,11 @@ sends it.
   the host must not sleep. Deploy on a private, always-on VPS. NOT serverless / NOT
   a sleep-prone free tier.
 - **Persistence = plain JSON files** (`data/db.json` app state, `data/reminders-fired.json`
-  the per-day fired log). No DB, no native modules. The store holds secrets
-  (webhook URLs, Telegram tokens) so it must stay private and out of git.
+  the per-cycle fired log). No DB, no native modules. Paths are resolved relative
+  to the CODE (project root), NOT `process.cwd()` — so saves work regardless of how
+  the process is launched (a systemd unit with a bad/blank `WorkingDirectory` was
+  what caused "save failed"). The store holds secrets (webhook URLs, Telegram
+  tokens) so it must stay private and out of git.
 - **Stack:** Node.js + Fastify + TypeScript, one long-lived process.
 
 ## Code style (developer preference)
@@ -57,7 +65,7 @@ sends it.
 ## Data model (`src/types.ts`)
 
 ```ts
-Webhook  { id, label, url }
+Webhook  { id, url }
 Guild    { id, name, webhooks: Webhook[] }
 Boss     { id, name, level }                        // reusable catalog
 Spawn    { id, bossName, level, guildIds: string[] } // one boss in a timing
@@ -91,8 +99,8 @@ GET  /healthz      -> { ok: true }
 Plus an always-running **scheduler** (`scheduler.ts`): every ~30s it loads the
 saved state and, for each timing due now (fireAt ≤ now < spawn) and not yet fired
 today, sends that timing's reminder and records it in the fired log. It runs once
-on boot. "Fired today" is keyed by WIB day + timing id, so each timing fires once
-per day and a restart doesn't re-fire.
+on boot. The fired log is keyed by game day (`cycleKey`) + timing id, so each
+timing fires once per game day and a restart doesn't re-fire.
 
 Single-user, so the API is coarse: the UI loads the whole state, edits it locally,
 and saves it all back with `PUT /api/state`. `/api/announce` reads the saved state
