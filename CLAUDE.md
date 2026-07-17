@@ -7,8 +7,8 @@ person uses a web UI to:
 
 - manage **guilds**, each with one or more **Discord webhooks**;
 - keep a reusable **boss catalog**;
-- build a **recurring daily schedule** of **timings** (boss groups). Each timing
-  (e.g. `12:00`) holds several **spawns**; each spawn is one boss assigned to one
+- build a **schedule** of **timings** (boss groups), each at an absolute WIB
+  date+time. Each timing holds several **spawns**; each spawn is one boss assigned to one
   or more guilds (a guild can have many bosses; a boss can go to many guilds);
 - keep a **watchlist** of extra webhooks (personal Telegram, a monitor channel);
 - **Announce** the schedule on demand to the channels, and get **automatic
@@ -24,14 +24,14 @@ sends it.
 
 - **Structured data, not parsing.** The UI is CRUD over guilds / bosses / schedule
   / watchlist / settings. No pasting, no LLM.
-- **Game day = 03:00 WIB reset.** A "day" runs 03:00 → next 02:59 WIB. A timing at
-  00:00–02:59 belongs to the early morning at the END of the current game day
-  (still "today's boss"). See `spawnEpochForCycle`/`cycleKey` in `wib.ts`.
-- **Reminders fire per game day.** The schedule is a standing template; each timing
-  fires ONE reminder at (spawn − lead) each game day, keyed by `cycleKey` for
-  idempotency. Update the schedule daily; it reflects whatever is saved at fire
-  time. (If a strict one-off — auto-stop after one cycle — is ever wanted, that's a
-  change in `scheduler.ts` + fired-log semantics.)
+- **Absolute date+times, one-off.** Each timing has a full WIB datetime (`when`,
+  a `YYYY-MM-DDTHH:MM` string). There is NO reset-cycle logic — you can schedule a
+  boss for tomorrow morning by picking that date. `wibToEpoch`/`formatWibDisplay`
+  in `wib.ts` convert/display it.
+- **Reminders fire once, then the timing is auto-removed.** The scheduler sends
+  ONE reminder at (`when` − lead), and once `when` has passed it deletes the timing
+  from the schedule (and the UI hides passed timings on load). So the schedule
+  always shows only upcoming bosses and stale entries never re-fire.
 - **Reminders are auto; the announcement is manual.** "Announce" posts the current
   schedule now (with a preview → confirm in the modal). Reminders need no
   confirmation.
@@ -69,7 +69,7 @@ Webhook  { id, url }
 Guild    { id, name, webhooks: Webhook[] }
 Boss     { id, name, level }                        // reusable catalog
 Spawn    { id, bossName, level, guildIds: string[] } // one boss in a timing
-Timing   { id, time /* "HH:MM" WIB */, spawns: Spawn[] } // a boss group
+Timing   { id, when /* "YYYY-MM-DDTHH:MM" WIB */, spawns: Spawn[] } // a boss group
 WatchTarget {
   id, label, kind: "discord"|"telegram",
   url,                    // discord
@@ -97,10 +97,10 @@ GET  /healthz      -> { ok: true }
 ```
 
 Plus an always-running **scheduler** (`scheduler.ts`): every ~30s it loads the
-saved state and, for each timing due now (fireAt ≤ now < spawn) and not yet fired
-today, sends that timing's reminder and records it in the fired log. It runs once
-on boot. The fired log is keyed by game day (`cycleKey`) + timing id, so each
-timing fires once per game day and a restart doesn't re-fire.
+saved state and, for each timing: (a) if `when` has passed, it removes the timing
+from the schedule and saves; (b) else if the reminder is due (`when − lead ≤ now`)
+and not yet fired, it sends the reminder and records the timing id in the fired
+log (a flat set, pruned to existing timings). It runs once on boot.
 
 Single-user, so the API is coarse: the UI loads the whole state, edits it locally,
 and saves it all back with `PUT /api/state`. `/api/announce` reads the saved state
@@ -120,7 +120,7 @@ fresh each call.
 - **Per-guild announcement / reminder:** only that guild's bosses.
 - **Concatenated announcement / watchlist reminder:** every boss, each tagged with
   its guild names.
-- Times shown inline as `HH:MM WIB`; announcements end with a footer
+- Times shown inline as `DD Mon HH:MM WIB` (e.g. `17 Jul 12:00 WIB`); announcements end with a footer
   `🌏 Times are UTC+7 (WIB, Indonesia)`.
 - Discord content is chunked at 2000 chars, Telegram at 4096 (`sender.ts`).
 - Discord webhooks ping `@here`/`@everyone`/roles by default if present in text.

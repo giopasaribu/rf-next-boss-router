@@ -1,50 +1,45 @@
-// "Fired today" log for reminders.
+// "Already fired" log for reminders.
 //
-// The schedule is a RECURRING daily template: each timing fires a reminder every
-// day. To avoid firing the same timing twice in a day (the scheduler ticks every
-// 30s), we record a key per (WIB day + timing) once fired, and only keep today's
-// keys. Persisted so a restart doesn't re-fire an already-sent reminder.
+// Timings are one-off (each has an absolute date+time and is removed once it
+// passes). Between fireAt and the spawn time the scheduler ticks several times,
+// so we record which timing ids have already fired to avoid re-sending. Once a
+// timing is removed from the schedule, its id is pruned from here too.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { FIRED_PATH } from "./config.js";
 
-interface FiredFile {
-  day: string; // WIB day key these entries belong to
-  keys: string[]; // fired timing ids for that day
-}
-
-function load(): FiredFile {
+function load(): string[] {
   try {
-    const parsed = JSON.parse(readFileSync(FIRED_PATH, "utf8")) as FiredFile;
-    if (typeof parsed.day === "string" && Array.isArray(parsed.keys)) return parsed;
+    const parsed = JSON.parse(readFileSync(FIRED_PATH, "utf8"));
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
   } catch {
-    /* fall through */
+    return [];
   }
-  return { day: "", keys: [] };
 }
 
-function save(data: FiredFile): void {
+function save(ids: string[]): void {
   mkdirSync(path.dirname(FIRED_PATH), { recursive: true });
-  writeFileSync(FIRED_PATH, JSON.stringify(data), "utf8");
+  writeFileSync(FIRED_PATH, JSON.stringify(ids), "utf8");
 }
 
-/** Has this timing already fired on the given WIB day? */
-export function hasFired(day: string, timingId: string): boolean {
-  const data = load();
-  if (data.day !== day) return false; // a new day resets everything
-  return data.keys.includes(timingId);
+/** Has this timing's reminder already been sent? */
+export function hasFired(timingId: string): boolean {
+  return load().includes(timingId);
 }
 
-/** Mark a timing as fired for the given WIB day (resetting on a new day). */
-export function markFired(day: string, timingId: string): void {
-  const data = load();
-  if (data.day !== day) {
-    save({ day, keys: [timingId] });
-    return;
+/** Record that a timing's reminder was sent. */
+export function markFired(timingId: string): void {
+  const ids = load();
+  if (!ids.includes(timingId)) {
+    ids.push(timingId);
+    save(ids);
   }
-  if (!data.keys.includes(timingId)) {
-    data.keys.push(timingId);
-    save(data);
-  }
+}
+
+/** Drop fired entries for timings that no longer exist (housekeeping). */
+export function retainFired(existingIds: string[]): void {
+  const ids = load();
+  const kept = ids.filter((id) => existingIds.includes(id));
+  if (kept.length !== ids.length) save(kept);
 }

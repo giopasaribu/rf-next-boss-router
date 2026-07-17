@@ -2,7 +2,7 @@
 
 A small **single-maintainer admin tool** for a game community's boss schedule. One
 person uses a web UI to manage guilds + Discord webhooks, a reusable boss catalog,
-and a **recurring daily schedule** of boss groups. It posts the schedule to the
+and a **schedule** of boss groups at specific date+times. It posts the schedule to the
 right channels on demand and **fires automatic reminders a few minutes before
 every spawn**.
 
@@ -24,18 +24,19 @@ you enter structured data; the app formats and sends it.
 - **Guilds & webhooks** — each guild has one or more Discord webhooks (managed in
   the UI, not env).
 - **Boss catalog** — reusable boss definitions (name + level).
-- **Schedule** — a recurring list of **timings** (boss groups). At each timing
+- **Schedule** — a list of **timings** (boss groups), each at an absolute WIB
+  **date+time**. Passed timings are removed automatically. At each timing
   (e.g. `12:00`) you add spawns; each spawn is a boss assigned to one or more
   guilds. A guild can have many bosses; a boss can go to many guilds.
 - **Announce** — post the current schedule now. Two modes (toggle):
   - **Per-guild** (default): each guild channel gets only its own bosses.
   - **Concatenated**: the whole schedule (each boss tagged with its guilds) to the
     selected channels.
-- **Reminders** — fire automatically each game day, `N` minutes before each timing
-  (dropdown: 5/10/15/30/60). **One reminder per boss group per channel** — a guild
-  with several bosses at 12:00 gets a single 12:00 reminder listing them all. The
-  game day resets at **03:00 WIB**, so a timing at 00:00–02:59 counts as that day's
-  late-night boss (fires in the early morning).
+- **Reminders** — fire automatically `N` minutes before each timing (dropdown:
+  5/10/15/30/60). **One reminder per boss group per channel** — a guild with
+  several bosses at one time gets a single reminder listing them all. Since timings
+  are absolute date+times, there's no reset-cycle to worry about — a boss that
+  spawns tomorrow morning is just a timing with tomorrow's date.
 - **Watchlist** — extra webhooks (your Telegram, a monitor channel) that also
   receive announcements and/or reminders for all timings.
 
@@ -140,9 +141,9 @@ src/
 ## Notes
 
 - **Times are UTC+7 (WIB)** everywhere — inputs, messages, reminders.
-- **Reminder timing:** each timing fires once per game day (03:00 WIB reset) at
-  `spawn − lead`. If the process is down through that window, that reminder is
-  skipped (it doesn't fire late after the boss has spawned).
+- **Reminder timing:** each timing fires once at `when − lead`, then the timing is
+  removed once `when` passes. If the process is down through the reminder window,
+  that reminder is skipped (it doesn't fire late after the boss has spawned).
 - **Backups:** `data/db.json` is your whole config — back it up. It contains
   secrets, so keep it private (it's gitignored).
 ```

@@ -9,7 +9,7 @@
 // single 12:00 reminder listing all of them.
 
 import { WIB_LABEL } from "./config.js";
-import { parseHhmm } from "./wib.js";
+import { wibToEpoch, formatWibDisplay } from "./wib.js";
 import type { DB, Guild, Spawn, Timing, WatchTarget } from "./types.js";
 
 // Short inline tag + a one-line footer with the full timezone description, so we
@@ -47,15 +47,19 @@ function bossLabel(spawn: Spawn): string {
   return lvl === "" ? spawn.bossName : `${spawn.bossName} Lv ${lvl}`;
 }
 
-/** Timings sorted by WIB time; invalid times sink to the end. */
+/** Timings sorted chronologically; invalid datetimes sink to the end. */
 export function sortedSchedule(db: DB): Timing[] {
   return [...db.schedule].sort((a, b) => {
-    const pa = parseHhmm(a.time);
-    const pb = parseHhmm(b.time);
-    const va = pa ? pa.hh * 60 + pa.mm : 9999;
-    const vb = pb ? pb.hh * 60 + pb.mm : 9999;
+    const va = wibToEpoch(a.when) ?? Number.MAX_SAFE_INTEGER;
+    const vb = wibToEpoch(b.when) ?? Number.MAX_SAFE_INTEGER;
     return va - vb;
   });
+}
+
+/** Friendly WIB datetime for a timing (falls back to the raw value if unparsable). */
+function timingLabel(timing: Timing): string {
+  const epoch = wibToEpoch(timing.when);
+  return epoch === null ? timing.when : formatWibDisplay(epoch);
 }
 
 function guildDestinations(guild: Guild): Destination[] {
@@ -89,7 +93,7 @@ export function buildGuildAnnouncement(db: DB, guild: Guild): string {
     const mine = timing.spawns.filter((s) => s.guildIds.includes(guild.id));
     if (mine.length === 0) continue;
     any = true;
-    lines.push(`🕛 ${timing.time} WIB`);
+    lines.push(`🕛 ${timingLabel(timing)} WIB`);
     for (const s of mine) lines.push(`• ${bossLabel(s)}`);
   }
   if (!any) return "(no bosses assigned)";
@@ -107,7 +111,7 @@ export function buildFullAnnouncement(db: DB): string {
   for (const timing of sortedSchedule(db)) {
     if (timing.spawns.length === 0) continue;
     any = true;
-    lines.push(`🕛 ${timing.time} WIB`);
+    lines.push(`🕛 ${timingLabel(timing)} WIB`);
     for (const s of timing.spawns) {
       const g = guildNames(db, s);
       lines.push(`• ${bossLabel(s)}${g ? ` — ${g}` : ""}`);
@@ -120,16 +124,18 @@ export function buildFullAnnouncement(db: DB): string {
 }
 
 /** Reminder for a timing, limited to one guild's bosses. */
-export function buildGuildReminder(db: DB, timing: Timing, guild: Guild, leadMin: number): string {
+export function buildGuildReminder(db: DB, timing: Timing, guild: Guild): string {
+  const leadMin = db.settings.reminderLeadMinutes;
   const mine = timing.spawns.filter((s) => s.guildIds.includes(guild.id));
-  const lines = [`⏰ Reminder — boss group spawns at ${timing.time} WIB (in ~${leadMin} min)`];
+  const lines = [`⏰ Reminder — boss group spawns at ${timingLabel(timing)} WIB (in ~${leadMin} min)`];
   for (const s of mine) lines.push(`• ${bossLabel(s)}`);
   return lines.join("\n");
 }
 
 /** Reminder for a timing showing the full group (used for watchlist). */
-export function buildGroupReminder(db: DB, timing: Timing, leadMin: number): string {
-  const lines = [`⏰ Reminder — boss group spawns at ${timing.time} WIB (in ~${leadMin} min)`];
+export function buildGroupReminder(db: DB, timing: Timing): string {
+  const leadMin = db.settings.reminderLeadMinutes;
+  const lines = [`⏰ Reminder — boss group spawns at ${timingLabel(timing)} WIB (in ~${leadMin} min)`];
   for (const s of timing.spawns) {
     const g = guildNames(db, s);
     lines.push(`• ${bossLabel(s)}${g ? ` — ${g}` : ""}`);
@@ -232,17 +238,17 @@ export function planAnnouncement(
  * in it (to that guild's webhooks), plus the full-group message to each opted-in
  * watchlist target. One reminder per destination.
  */
-export function planReminder(db: DB, timing: Timing, leadMin: number): PlanItem[] {
+export function planReminder(db: DB, timing: Timing): PlanItem[] {
   const items: PlanItem[] = [];
 
   for (const guild of db.guilds) {
     const has = timing.spawns.some((s) => s.guildIds.includes(guild.id));
     if (!has) continue;
-    const message = buildGuildReminder(db, timing, guild, leadMin);
+    const message = buildGuildReminder(db, timing, guild);
     for (const dest of guildDestinations(guild)) items.push({ label: dest.label, message, destination: dest });
   }
 
-  const groupMsg = buildGroupReminder(db, timing, leadMin);
+  const groupMsg = buildGroupReminder(db, timing);
   for (const w of db.watchlist) {
     if (!w.receiveReminders) continue;
     const dest = watchDestination(w);

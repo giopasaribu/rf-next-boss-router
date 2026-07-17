@@ -9,8 +9,19 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const PORT: number = Number(process.env.PORT ?? 3000);
-export const HOST: string = process.env.HOST ?? "0.0.0.0";
+/**
+ * Read an env var, treating an EMPTY/blank value as unset. Critical: `.env`
+ * often has lines like `DB_PATH=` (blank). `process.env.DB_PATH ?? default`
+ * would keep the empty string (only null/undefined trigger `??`), and the app
+ * would try to open "" -> ENOENT. This helper falls back on blanks too.
+ */
+function envOr(name: string, fallback: string): string {
+  const v = process.env[name];
+  return v !== undefined && v.trim() !== "" ? v : fallback;
+}
+
+export const PORT: number = Number(envOr("PORT", "3000"));
+export const HOST: string = envOr("HOST", "0.0.0.0");
 
 // Resolve paths relative to the CODE location (project root), not the current
 // working directory — so writes work regardless of how the process is launched
@@ -22,17 +33,16 @@ const defaultDataDir = path.join(projectRoot, "data");
 
 // Where the app state and the reminder "fired" log are persisted. These MUST
 // live on a persistent disk so the schedule + reminders survive a restart.
-export const DB_PATH: string = process.env.DB_PATH ?? path.join(defaultDataDir, "db.json");
-export const FIRED_PATH: string =
-  process.env.FIRED_PATH ?? path.join(defaultDataDir, "reminders-fired.json");
+export const DB_PATH: string = envOr("DB_PATH", path.join(defaultDataDir, "db.json"));
+export const FIRED_PATH: string = envOr(
+  "FIRED_PATH",
+  path.join(defaultDataDir, "reminders-fired.json"),
+);
 
 // Fixed timezone for ALL times in this app: UTC+7 (WIB, Indonesia). No DST.
+// Timings are absolute date+times (WIB); there is no reset-cycle logic.
 export const WIB_OFFSET_MINUTES = 7 * 60;
 export const WIB_LABEL = "UTC+7 (WIB, Indonesia)";
-
-// The in-game day resets at 03:00 WIB. A "game day" runs 03:00 → next 02:59.
-// So a timing at 00:00–02:59 belongs to the early morning of the SAME game day.
-export const CYCLE_RESET_HOUR = 3;
 
 // Reminder lead options offered in the UI dropdown (minutes before spawn).
 export const REMINDER_LEAD_OPTIONS = [5, 10, 15, 30, 60];

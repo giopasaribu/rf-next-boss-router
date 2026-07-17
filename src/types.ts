@@ -31,10 +31,10 @@ export interface Spawn {
   guildIds: string[]; // guilds this boss is announced to (can be many)
 }
 
-/** A timing = a boss group: everything spawning at one time. */
+/** A timing = a boss group: everything spawning at one absolute date+time (WIB). */
 export interface Timing {
   id: string;
-  time: string; // "HH:MM" (WIB)
+  when: string; // "YYYY-MM-DDTHH:MM" interpreted as WIB wall-clock
   spawns: Spawn[];
 }
 
