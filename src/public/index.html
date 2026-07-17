@@ -26,12 +26,16 @@
   .muted { color:var(--muted); font-size:13px; }
   a { color:var(--accent); }
 
-  /* sticky action bar */
-  .bar { position:sticky; top:0; z-index:20; background:rgba(15,17,21,0.95);
-    backdrop-filter:blur(6px); border-bottom:1px solid var(--border);
-    display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:16px; }
+  /* sticky header (action bar + tabs) */
+  .header { position:sticky; top:0; z-index:20; background:rgba(15,17,21,0.97);
+    backdrop-filter:blur(6px); border-bottom:1px solid var(--border); margin-bottom:16px; }
+  .bar { display:flex; align-items:center; gap:12px; padding:12px 16px; }
   .bar .grow { flex:1; }
   .bar .status { font-size:13px; }
+  .tabs { display:flex; gap:6px; padding:0 16px 10px; flex-wrap:wrap; }
+  .tab { background:var(--panel-2); border:1px solid var(--border); color:var(--muted);
+    border-radius:8px; padding:6px 12px; cursor:pointer; font:inherit; font-size:14px; }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .dirty { color:var(--warn); }
   .saved { color:var(--ok); }
 
@@ -95,20 +99,23 @@
   .status.fail { background:rgba(224,90,90,.12); color:var(--err); }
 </style>
 
-<div class="bar">
-  <h1>🐉 Boss Router</h1>
-  <span class="muted">times are UTC+7 (WIB)</span>
-  <span class="grow"></span>
-  <span id="saveStatus" class="status"></span>
-  <button id="announceBtn">📣 Announce…</button>
+<div class="header">
+  <div class="bar">
+    <h1>🐉 Boss Router</h1>
+    <span class="muted">times are UTC+7 (WIB)</span>
+    <span class="grow"></span>
+    <span id="saveStatus" class="status"></span>
+    <button id="announceBtn">📣 Announce…</button>
+  </div>
+  <div class="tabs" id="tabs"></div>
 </div>
 
 <div class="wrap">
-  <div class="panel" id="settingsPanel"></div>
   <div class="panel" id="schedulePanel"></div>
   <div class="panel" id="guildsPanel"></div>
   <div class="panel" id="bossesPanel"></div>
   <div class="panel" id="watchPanel"></div>
+  <div class="panel" id="settingsPanel"></div>
 </div>
 
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
@@ -318,7 +325,7 @@
         h("div", {}, h("label", {}, "Level"),
           h("input", { type: "text", class: "small", value: spawn.level, placeholder: "61",
             oninput: function (e) { spawn.level = e.target.value; markDirty(); } })),
-        h("div", {}, h("label", {}, "Guilds"), renderGuildSelect(spawn))
+        h("div", { style: "flex:1 1 200px" }, h("label", {}, "Guilds"), renderGuildChecks(spawn))
       )
     );
 
@@ -327,22 +334,21 @@
     return row;
   }
 
-  // Multi-select listbox for assigning guilds to a spawn.
-  function renderGuildSelect(spawn) {
-    if (state.guilds.length === 0) return h("span", { class: "muted" }, "add guilds first");
-    var sel = h("select", { multiple: "multiple",
-      size: Math.min(Math.max(state.guilds.length, 2), 4),
-      style: "width:170px",
-      onchange: function (e) {
-        spawn.guildIds = Array.prototype.map.call(e.target.selectedOptions, function (o) { return o.value; });
-        markDirty();
-      } });
+  // Inline checkboxes for assigning guilds to a spawn (sits on the boss row).
+  function renderGuildChecks(spawn) {
+    if (state.guilds.length === 0) return h("span", { class: "muted" }, "add guilds first (Guilds tab)");
+    var box = h("div", { class: "guildchecks" });
     state.guilds.forEach(function (g) {
-      var o = h("option", { value: g.id }, g.name || "(unnamed)");
-      o.selected = spawn.guildIds.indexOf(g.id) !== -1;
-      sel.append(o);
+      box.append(h("label", {},
+        h("input", { type: "checkbox", checked: spawn.guildIds.indexOf(g.id) !== -1,
+          onchange: function (e) {
+            if (e.target.checked) { if (spawn.guildIds.indexOf(g.id) === -1) spawn.guildIds.push(g.id); }
+            else { spawn.guildIds = spawn.guildIds.filter(function (id) { return id !== g.id; }); }
+            markDirty();
+          } }),
+        g.name || "(unnamed)"));
     });
-    return sel;
+    return box;
   }
 
   // --- GUILDS --------------------------------------------------------------
@@ -455,13 +461,40 @@
     if (i !== -1) arr.splice(i, 1);
   }
 
+  // Tabbed pages: only one section is visible at a time, and it re-renders every
+  // time you open it — so e.g. the Schedule's guild checkboxes always reflect the
+  // current guild list, even after adding a guild on the Guilds tab.
+  var PAGES = [
+    { id: "schedule", panel: "schedulePanel", label: "🗓️ Schedule", render: renderSchedule },
+    { id: "guilds",   panel: "guildsPanel",   label: "🏰 Guilds",   render: renderGuilds },
+    { id: "bosses",   panel: "bossesPanel",   label: "👹 Bosses",   render: renderBosses },
+    { id: "watch",    panel: "watchPanel",    label: "👁️ Watchlist", render: renderWatchlist },
+    { id: "settings", panel: "settingsPanel", label: "⚙️ Settings", render: renderSettings },
+  ];
+  var activePage = "schedule";
+
+  function renderTabs() {
+    var t = document.getElementById("tabs");
+    t.innerHTML = "";
+    PAGES.forEach(function (pg) {
+      t.append(h("button", { class: "tab" + (pg.id === activePage ? " active" : ""),
+        onclick: function () { showPage(pg.id); } }, pg.label));
+    });
+  }
+
+  function showPage(id) {
+    activePage = id;
+    PAGES.forEach(function (pg) {
+      document.getElementById(pg.panel).style.display = pg.id === id ? "" : "none";
+    });
+    var pg = PAGES.find(function (p) { return p.id === id; });
+    if (pg) pg.render();
+    renderTabs();
+  }
+
   function renderAll() {
     renderStatus();
-    renderSettings();
-    renderSchedule();
-    renderGuilds();
-    renderBosses();
-    renderWatchlist();
+    showPage(activePage);
   }
 
   // --- ANNOUNCE modal ------------------------------------------------------
